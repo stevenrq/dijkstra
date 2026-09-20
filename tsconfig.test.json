@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "incremental": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "isolatedModules": false,
+    "target": "ES2022",
+    "lib": ["esnext", "dom"],
+    "outDir": ".test-out",
+    "types": ["node"],
+    "plugins": []
+  },
+  "include": ["lib/**/*.ts"],
+  "exclude": ["node_modules", ".next"]
+}

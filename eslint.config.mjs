@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Salida compilada de las pruebas: es JavaScript generado, no fuente.
+    ".test-out/**",
   ]),
 ]);
 
