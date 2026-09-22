@@ -1,13 +1,36 @@
-import { chromium, devices } from "playwright";
+import { chromium, devices, webkit } from "playwright";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 
-const URL = "http://localhost:3000";
-const OUT = process.argv[2] ?? "./capturas";
+/*
+ * Uso:
+ *   npm run test:movil -- --url=http://localhost:3100 --salida=capturas/movil
+ *   npm run test:movil -- --navegadores=chromium,webkit
+ *
+ * WebKit es el motor real de Safari en el iPhone. Firefox no se prueba aquí:
+ * Playwright no puede emular un teléfono con él (no admite `isMobile`).
+ */
+const { values: opciones, positionals } = parseArgs({
+  allowPositionals: true,
+  options: {
+    url: { type: "string" },
+    salida: { type: "string" },
+    navegadores: { type: "string" },
+  },
+});
+
+const URL = (opciones.url ?? process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
+const OUT = opciones.salida ?? positionals[0] ?? "./capturas/movil";
+const MOTORES = { chromium, webkit };
+const NAVEGADORES = (opciones.navegadores ?? "chromium,webkit")
+  .split(",")
+  .map((n) => n.trim())
+  .filter(Boolean);
 mkdirSync(OUT, { recursive: true });
 
-// Los tres tamaños que importan: el iPhone más vendido, el más pequeño que
-// sigue siendo común, y un Android estrecho.
+// Las cuatro configuraciones que importan: el iPhone más vendido, el SE de
+// 375 px, el SE original de 320 px (el más estrecho realista) y un Android.
 const APARATOS = [
   { nombre: "iphone-14", device: devices["iPhone 14"] },
   // El iPhone SE de 2ª/3ª generación, que es el que trae Chrome DevTools.
@@ -24,8 +47,6 @@ const fallos = [];
 const notas = [];
 const fallo = (aparato, msg) => fallos.push(`[${aparato}] ${msg}`);
 const nota = (aparato, msg) => notas.push(`[${aparato}] ${msg}`);
-
-const browser = await chromium.launch();
 
 /** Arrastre táctil real, vía protocolo del navegador (no eventos sintéticos). */
 async function arrastreTactil(cdp, x1, y1, x2, y2) {
@@ -47,7 +68,16 @@ async function arrastreTactil(cdp, x1, y1, x2, y2) {
   });
 }
 
-for (const { nombre, device } of APARATOS) {
+for (const motor of NAVEGADORES) {
+  const tipo = MOTORES[motor];
+  if (!tipo) {
+    nota(motor, "se omite: Playwright no puede emular un teléfono con este motor (Firefox no admite isMobile)");
+    continue;
+  }
+  const browser = await tipo.launch();
+
+for (const { nombre: aparato, device } of APARATOS) {
+  const nombre = `${motor}-${aparato}`;
   const context = await browser.newContext({ ...device, locale: "es-CO" });
   const page = await context.newPage();
 
@@ -158,7 +188,7 @@ for (const { nombre, device } of APARATOS) {
     const seccion = document.querySelector("section.no-imprimir");
     const limite = seccion.getBoundingClientRect().right;
     const malos = [];
-    for (const el of seccion.querySelectorAll("p, h3, span")) {
+    for (const el of seccion.querySelectorAll("p, h2, h3, span")) {
       const b = el.getBoundingClientRect();
       if (b.width === 0) continue;
       if (el.closest(".overflow-x-auto") || el.closest("table")) continue;
@@ -306,7 +336,8 @@ for (const { nombre, device } of APARATOS) {
   const derrames = await page.evaluate(() => {
     const salidos = [];
     for (const g of document.querySelectorAll('svg[role="application"] g[role="button"]')) {
-      const circulo = g.querySelector("circle:not([fill='transparent'])");
+      // El círculo del nodo (no los anillos de foco, origen o ruta que lo rodean).
+      const circulo = g.querySelector("circle[class*='transition-']");
       const textos = [...g.querySelectorAll("text")];
       if (!circulo || textos.length === 0) continue;
       const c = circulo.getBoundingClientRect();
@@ -357,7 +388,7 @@ for (const { nombre, device } of APARATOS) {
     if (obstruido) {
       nota(nombre, "el nodo de prueba queda bajo un control flotante; se omite el arrastre");
     } else {
-      const cdp = await context.newCDPSession(page);
+
       const r = await page.evaluate(() => {
         const b = document
           .querySelector('svg[role="application"]')
@@ -380,8 +411,21 @@ for (const { nombre, device } of APARATOS) {
       );
       if (Math.hypot(destinoX - cx, destinoY - cy) < 15) {
         nota(nombre, "el lienzo es demasiado pequeño para un arrastre medible; se omite");
-      } else {
+      } else if (motor === "chromium") {
+        const cdp = await context.newCDPSession(page);
         await arrastreTactil(cdp, cx, cy, destinoX, destinoY);
+        seArrastro = true;
+      } else {
+        // WebKit no expone el protocolo de Chrome, así que no hay toques
+        // reales: se arrastra con eventos de puntero de ratón. Prueba la
+        // lógica del arrastre, no el `touch-action` del navegador.
+        await page.mouse.move(cx, cy);
+        await page.mouse.down();
+        for (let i = 1; i <= 8; i++) {
+          await page.mouse.move(cx + ((destinoX - cx) * i) / 8, cy + ((destinoY - cy) * i) / 8);
+        }
+        await page.mouse.up();
+        nota(nombre, "arrastre con eventos de ratón: WebKit no expone toques por CDP");
         seArrastro = true;
       }
     }
@@ -430,7 +474,8 @@ for (const { nombre, device } of APARATOS) {
   await context.close();
 }
 
-await browser.close();
+  await browser.close();
+}
 
 console.log("\n===== NOTAS =====");
 for (const n of notas) console.log(" ·", n);

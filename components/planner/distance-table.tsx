@@ -50,64 +50,65 @@ export function DistanceTable() {
   const anterior = stepIndex > 0 ? result.steps[stepIndex - 1] : null;
 
   return (
-    <div className="h-full overflow-auto">
-      <Table>
-        <TableHeader className="bg-card sticky top-0 z-10">
-          <TableRow>
-            <TableHead>Punto</TableHead>
-            <TableHead className="text-right">
-              d(v) en {metricLabel(metric).toLowerCase()}
-            </TableHead>
-            <TableHead>Predecesor</TableHead>
-            <TableHead>Estado</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {graph.nodes.map((node) => {
-            const distancia = step.distances[node.id] ?? Infinity;
-            const previo = step.previous[node.id];
-            const esActual = step.currentNode === node.id;
-            const cambio =
-              anterior && anterior.distances[node.id] !== distancia;
+    // La tabla es su propio contenedor de desplazamiento: si se desplazara un
+    // div exterior, el encabezado fijo quedaría pegado al contenedor interno
+    // (que no se mueve) y se iría con el resto de la tabla.
+    <Table containerClassName="h-full overflow-auto">
+      <TableHeader className="bg-card sticky top-0 z-10">
+        <TableRow>
+          <TableHead>Punto</TableHead>
+          <TableHead className="text-right">
+            d(v) en {metricLabel(metric).toLowerCase()}
+          </TableHead>
+          <TableHead>Predecesor</TableHead>
+          <TableHead>Estado</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {graph.nodes.map((node) => {
+          const distancia = step.distances[node.id] ?? Infinity;
+          const previo = step.previous[node.id];
+          const esActual = step.currentNode === node.id;
+          const cambio =
+            anterior && anterior.distances[node.id] !== distancia;
 
-            return (
-              <TableRow
-                key={node.id}
+          return (
+            <TableRow
+              key={node.id}
+              className={cn(
+                esActual && "bg-graph-current/10",
+                node.id === source && "font-medium",
+              )}
+            >
+              <TableCell className="whitespace-nowrap">
+                {node.label}
+              </TableCell>
+              <TableCell
                 className={cn(
-                  esActual && "bg-graph-current/10",
-                  node.id === source && "font-medium",
+                  "text-right tabular-nums transition-colors",
+                  cambio && "text-graph-improved font-semibold",
+                  !Number.isFinite(distancia) && "text-muted-foreground",
                 )}
               >
-                <TableCell className="whitespace-nowrap">
-                  {node.label}
-                </TableCell>
-                <TableCell
-                  className={cn(
-                    "text-right tabular-nums transition-colors",
-                    cambio && "text-graph-improved font-semibold",
-                    !Number.isFinite(distancia) && "text-muted-foreground",
-                  )}
-                >
-                  {Number.isFinite(distancia)
-                    ? formatMetric(distancia, metric)
-                    : "∞"}
-                </TableCell>
-                <TableCell className="text-muted-foreground whitespace-nowrap">
-                  {previo ? (nodeById.get(previo) ?? previo) : "—"}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  <EstadoCelda
-                    settled={settled.has(node.id)}
-                    enCola={enCola.has(node.id)}
-                    esActual={esActual}
-                  />
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+                {Number.isFinite(distancia)
+                  ? formatMetric(distancia, metric)
+                  : "∞"}
+              </TableCell>
+              <TableCell className="text-muted-foreground whitespace-nowrap">
+                {previo ? (nodeById.get(previo) ?? previo) : "—"}
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                <EstadoCelda
+                  settled={settled.has(node.id)}
+                  enCola={enCola.has(node.id)}
+                  esActual={esActual}
+                />
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

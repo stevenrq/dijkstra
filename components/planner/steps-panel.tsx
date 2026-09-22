@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "cn";
 
 import type { StepKind } from "@/lib/graph/dijkstra";
+import { formatDecimal } from "@/lib/graph/format";
 import { usePlanner, usePlannerDispatch } from "./planner-context";
 import type { Speed } from "./planner-reducer";
 
@@ -147,7 +148,7 @@ export function StepsPanel() {
               key={velocidad}
               type="button"
               aria-pressed={speed === velocidad}
-              aria-label={`Velocidad ${velocidad}x`}
+              aria-label={`Velocidad ${formatDecimal(velocidad)}x`}
               onClick={() => dispatch({ type: "SET_SPEED", speed: velocidad })}
               className={cn(
                 "focus-visible:ring-ring/50 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors outline-none focus-visible:ring-3",
@@ -156,7 +157,7 @@ export function StepsPanel() {
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {velocidad}×
+              {formatDecimal(velocidad)}×
             </button>
           ))}
         </div>
@@ -182,7 +183,8 @@ export function StepsPanel() {
           min={0}
           max={total - 1}
           step={1}
-          aria-label="Avance de la ejecución"
+          getAriaLabel={() => "Paso de la ejecución"}
+          getAriaValueText={(_, valor) => `Paso ${valor + 1} de ${total}`}
           onValueChange={(value) =>
             dispatch({
               type: "SEEK",

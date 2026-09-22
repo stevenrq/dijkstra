@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "cn";
 
+import { parseColombianNumber } from "@/lib/graph/format";
 import { METRIC_LABELS, METRIC_UNITS, METRICS, type Metric } from "@/lib/graph/types";
 import { usePlanner, usePlannerDispatch } from "./planner-context";
 
@@ -33,6 +34,8 @@ export function EditorPanel() {
     () => new Map(graph.nodes.map((node) => [node.id, node.label])),
     [graph.nodes],
   );
+  const nombreCorredor = (edge: { from: string; to: string; directed: boolean }) =>
+    `${nodeById.get(edge.from) ?? edge.from} ${edge.directed ? "→" : "↔"} ${nodeById.get(edge.to) ?? edge.to}`;
 
   return (
     <Accordion defaultValue={["puntos", "corredores"]} className="grid gap-2">
@@ -62,24 +65,7 @@ export function EditorPanel() {
                     "border-ring bg-muted/50",
                 )}
               >
-                <Input
-                  value={node.label}
-                  aria-label={`Nombre de ${node.label}`}
-                  className="h-7 border-transparent bg-transparent px-1.5 text-sm shadow-none"
-                  onFocus={() =>
-                    dispatch({
-                      type: "SELECT",
-                      selection: { kind: "node", id: node.id },
-                    })
-                  }
-                  onChange={(event) =>
-                    dispatch({
-                      type: "UPDATE_NODE",
-                      id: node.id,
-                      changes: { label: event.target.value },
-                    })
-                  }
-                />
+                <NombreInput nodeId={node.id} label={node.label} />
                 <div className="flex items-center gap-0.5">
                   <Tooltip>
                     <TooltipTrigger
@@ -142,13 +128,9 @@ export function EditorPanel() {
               variant="outline"
               size="sm"
               className="mt-1 justify-start"
-              onClick={() =>
-                dispatch({
-                  type: "ADD_NODE",
-                  x: 500 + Math.round((Math.random() - 0.5) * 320),
-                  y: 700 + Math.round((Math.random() - 0.5) * 320),
-                })
-              }
+              // Sin coordenadas: el reductor busca un sitio libre cerca del
+              // centro del grafo, dentro de lo que ya se está viendo.
+              onClick={() => dispatch({ type: "ADD_NODE" })}
             >
               <Plus />
               Agregar punto
@@ -194,7 +176,7 @@ export function EditorPanel() {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Eliminar corredor"
+                    aria-label={`Eliminar el corredor ${nombreCorredor(edge)}`}
                     onClick={() => dispatch({ type: "DELETE_EDGE", id: edge.id })}
                   >
                     <Trash2 />
@@ -209,13 +191,20 @@ export function EditorPanel() {
 
                 <div className="grid grid-cols-3 gap-1.5">
                   {METRICS.map((m) => (
-                    <PesoInput key={m} edgeId={edge.id} metric={m} value={edge.weights[m]} />
+                    <PesoInput
+                      key={m}
+                      edgeId={edge.id}
+                      metric={m}
+                      value={edge.weights[m]}
+                      corredor={nombreCorredor(edge)}
+                    />
                   ))}
                 </div>
 
                 <label className="text-muted-foreground flex items-center gap-2 text-xs">
                   <Switch
                     size="sm"
+                    aria-label={`Sentido único en ${nombreCorredor(edge)}`}
                     checked={edge.directed}
                     onCheckedChange={(checked) =>
                       dispatch({
@@ -237,6 +226,48 @@ export function EditorPanel() {
 }
 
 /**
+ * Campo de nombre de un punto.
+ *
+ * Guarda el texto localmente para poder dejarlo vacío mientras se escribe sin
+ * que el punto se quede sin nombre: el grafo solo cambia cuando hay texto, y
+ * si al salir del campo quedó vacío se restaura el nombre anterior.
+ */
+function NombreInput({ nodeId, label }: { nodeId: string; label: string }) {
+  const dispatch = usePlannerDispatch();
+  const [text, setText] = useState(label);
+  const [ultimo, setUltimo] = useState(label);
+
+  // Resincronización cuando el nombre cambia desde fuera (deshacer, importar).
+  if (label !== ultimo) {
+    setUltimo(label);
+    if (text !== label) setText(label);
+  }
+
+  return (
+    <Input
+      value={text}
+      aria-label={`Nombre de ${label}`}
+      className="h-7 border-transparent bg-transparent px-1.5 text-sm shadow-none"
+      onFocus={() =>
+        dispatch({ type: "SELECT", selection: { kind: "node", id: nodeId } })
+      }
+      onChange={(event) => {
+        const siguiente = event.target.value;
+        setText(siguiente);
+        if (siguiente.trim() === "") return;
+        dispatch({ type: "UPDATE_NODE", id: nodeId, changes: { label: siguiente } });
+      }}
+      onBlur={() => {
+        if (text.trim() === "") setText(label);
+        // Salir del campo cierra el grupo: lo escrito hasta aquí es un solo
+        // paso de deshacer, y lo que se escriba después, otro.
+        dispatch({ type: "END_EDIT_GROUP" });
+      }}
+    />
+  );
+}
+
+/**
  * Campo de peso.
  *
  * Es `type="text"` con `inputMode="decimal"` y no `type="number"` a propósito:
@@ -245,15 +276,20 @@ export function EditorPanel() {
  * valor se perdía y era imposible escribir un peso negativo. Y escribir un
  * peso negativo tiene que ser posible: es lo que demuestra en vivo que
  * Dijkstra exige pesos no negativos.
+ *
+ * Se lee como se escribe en Colombia: «2.360.000» son dos millones trescientos
+ * sesenta mil, no 2,36.
  */
 function PesoInput({
   edgeId,
   metric,
   value,
+  corredor,
 }: {
   edgeId: string;
   metric: Metric;
   value: number;
+  corredor: string;
 }) {
   const dispatch = usePlannerDispatch();
   const { graph } = usePlanner();
@@ -265,11 +301,11 @@ function PesoInput({
   // reintenta el render de inmediato en vez de pintar el valor viejo primero.
   if (value !== ultimoValor) {
     setUltimoValor(value);
-    if (Number(text.replace(",", ".")) !== value) setText(String(value));
+    if (parseColombianNumber(text) !== value) setText(String(value));
   }
 
-  const parsed = Number(text.replace(",", "."));
-  const invalido = text.trim() === "" || !Number.isFinite(parsed);
+  const parsed = parseColombianNumber(text);
+  const invalido = parsed === null;
 
   return (
     <label className="grid gap-0.5">
@@ -282,14 +318,14 @@ function PesoInput({
         value={text}
         className="h-7 px-1.5 text-sm tabular-nums"
         aria-invalid={invalido || parsed < 0}
-        aria-label={`${METRIC_LABELS[metric]} en ${METRIC_UNITS[metric]}`}
+        aria-label={`${METRIC_LABELS[metric]} en ${METRIC_UNITS[metric]} de ${corredor}`}
         onChange={(event) => {
           const siguiente = event.target.value;
           setText(siguiente);
-          const numero = Number(siguiente.replace(",", "."));
+          const numero = parseColombianNumber(siguiente);
           // Estados intermedios como "-" o "" se dejan pasar sin despachar:
           // el grafo solo cambia cuando lo escrito ya es un número.
-          if (siguiente.trim() === "" || !Number.isFinite(numero)) return;
+          if (numero === null) return;
           const edge = graph.edges.find((candidate) => candidate.id === edgeId);
           if (!edge || edge.weights[metric] === numero) return;
           dispatch({
@@ -297,6 +333,11 @@ function PesoInput({
             id: edgeId,
             changes: { weights: { ...edge.weights, [metric]: numero } },
           });
+        }}
+        onBlur={() => {
+          // Lo que no es un número no llegó al grafo: se vuelve al valor real.
+          if (parseColombianNumber(text) === null) setText(String(value));
+          dispatch({ type: "END_EDIT_GROUP" });
         }}
       />
     </label>

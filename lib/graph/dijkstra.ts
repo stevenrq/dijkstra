@@ -147,9 +147,12 @@ export function dijkstra(
   const issues = validateGraph(graph, metric);
   const blocking = issues.filter((issue) => issue.severity === "error");
 
-  const distances: Record<NodeId, number> = {};
-  const previous: Record<NodeId, NodeId | null> = {};
-  const previousEdge: Record<NodeId, string | null> = {};
+  // Registros sin prototipo: con un objeto normal, un nodo llamado
+  // `__proto__` escribiría sobre el prototipo en vez de guardar su distancia,
+  // y `"toString" in distances` sería verdadero aunque no exista ese nodo.
+  const distances: Record<NodeId, number> = Object.create(null);
+  const previous: Record<NodeId, NodeId | null> = Object.create(null);
+  const previousEdge: Record<NodeId, string | null> = Object.create(null);
   for (const node of graph.nodes) {
     distances[node.id] = INF;
     previous[node.id] = null;
@@ -177,9 +180,11 @@ export function dijkstra(
     source,
     target,
     metric,
-    distances,
-    previous,
-    previousEdge,
+    // Copias normales, como las de cada instantánea: el registro sin
+    // prototipo es un detalle interno del cálculo.
+    distances: { ...distances },
+    previous: { ...previous },
+    previousEdge: { ...previousEdge },
     path: [],
     pathEdges: [],
     total: INF,
@@ -403,9 +408,9 @@ export function dijkstra(
     source,
     target,
     metric,
-    distances,
-    previous,
-    previousEdge,
+    distances: { ...distances },
+    previous: { ...previous },
+    previousEdge: { ...previousEdge },
     path,
     pathEdges,
     total,

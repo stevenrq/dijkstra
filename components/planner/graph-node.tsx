@@ -89,16 +89,14 @@ function GraphNodeViewImpl({
   onKeyDown,
 }: GraphNodeViewProps) {
   const solid = phase === "settled" || phase === "current";
-  const descripcion = [
+  const descripcion = unirFrases([
     label,
     kindLabel,
     distanceText ? `distancia ${distanceText}` : null,
     isSource ? "origen" : null,
     isTarget ? "destino" : null,
     onPath ? "en la ruta mínima" : null,
-  ]
-    .filter(Boolean)
-    .join(". ");
+  ]);
 
   // El círculo dibujado puede quedar en 6 px en un teléfono, así que el área
   // que recibe el toque se agranda... pero con tope. Sin él, con el mapa
@@ -123,7 +121,8 @@ function GraphNodeViewImpl({
       tabIndex={tabbable ? 0 : -1}
       aria-label={descripcion}
       aria-pressed={selected}
-      className="cursor-grab outline-none focus-visible:outline-none active:cursor-grabbing"
+      data-nodo={id}
+      className="group cursor-grab outline-none focus-visible:outline-none active:cursor-grabbing"
       onPointerDown={(event) => onPointerDown(event, id)}
       onKeyDown={(event) => onKeyDown(event, id)}
     >
@@ -141,6 +140,17 @@ function GraphNodeViewImpl({
           pointerEvents="none"
         />
       )}
+
+      {/* Anillo de foco: el contorno del navegador no rodea bien un <g> de
+          SVG, así que se dibuja uno propio que solo aparece con el teclado. */}
+      <circle
+        cx={x}
+        cy={y}
+        r={NODE_RADIUS + 15}
+        className="anillo-foco stroke-ring fill-none opacity-0 group-focus-visible:opacity-100"
+        strokeWidth={3 * Math.max(1, unitsPerPx)}
+        pointerEvents="none"
+      />
 
       {selected && (
         <circle
@@ -254,6 +264,20 @@ function GraphNodeViewImpl({
       )}
     </g>
   );
+}
+
+/**
+ * Une las partes del nombre accesible con punto y espacio, sin duplicar el
+ * punto cuando una parte ya termina en uno ("Bogotá D.C.. Centro de acopio").
+ */
+function unirFrases(partes: (string | null)[]): string {
+  return partes
+    .filter((parte): parte is string => Boolean(parte))
+    .reduce(
+      (texto, parte) =>
+        texto === "" ? parte : `${texto}${texto.endsWith(".") ? " " : ". "}${parte}`,
+      "",
+    );
 }
 
 export const GraphNodeView = memo(GraphNodeViewImpl);

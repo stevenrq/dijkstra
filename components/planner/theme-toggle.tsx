@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useLayoutEffect, useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,28 @@ const leerServidor = () => false;
 
 export function ThemeToggle() {
   const oscuro = useSyncExternalStore(suscribir, leerCliente, leerServidor);
+
+  // En desarrollo, el remontaje de StrictMode deja el <html> solo con los
+  // atributos del JSX y borra la clase que puso el script en línea (lo
+  // explica la guía de Next "preventing-flash-before-hydration"). Lo mismo
+  // pasa si React tiene que volver a renderizar la raíz. Se vuelve a aplicar
+  // antes de pintar; en producción normalmente no cambia nada.
+  useLayoutEffect(() => {
+    let guardado: string | null = null;
+    try {
+      guardado = window.localStorage.getItem(STORAGE_KEY);
+    } catch {
+      // Almacenamiento bloqueado: manda la preferencia del sistema.
+    }
+    const debeSerOscuro =
+      guardado === "dark" ||
+      (guardado === null &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (document.documentElement.classList.contains("dark") !== debeSerOscuro) {
+      document.documentElement.classList.toggle("dark", debeSerOscuro);
+      window.dispatchEvent(new Event(EVENTO));
+    }
+  }, []);
 
   const alternar = useCallback(() => {
     const siguiente = !document.documentElement.classList.contains("dark");

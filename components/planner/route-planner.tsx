@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "cn";
 
@@ -11,6 +11,7 @@ import { EditorPanel } from "./editor-panel";
 import { GraphCanvas } from "./graph-canvas";
 import { Legend } from "./legend";
 import { PlannerProvider } from "./planner-context";
+import { PrintReport } from "./print-report";
 import { QueueView } from "./queue-view";
 import { RoutePanel } from "./route-panel";
 import { StepsPanel } from "./steps-panel";
@@ -32,6 +33,32 @@ const ALTURA: Record<AlturaPanel, string> = {
   expandido: "h-[64dvh]",
 };
 
+const SIGUIENTE: Record<AlturaPanel, AlturaPanel> = {
+  contraido: "normal",
+  normal: "expandido",
+  expandido: "contraido",
+};
+
+const ETIQUETA: Record<AlturaPanel, string> = {
+  contraido: "Mostrar el panel",
+  normal: "Agrandar el panel",
+  expandido: "Ocultar el panel y ver el mapa completo",
+};
+
+/** Mismos cortes que Tailwind: lg = 64rem, xl = 80rem. */
+function usePuntoDeCorte(consulta: string): boolean {
+  return useSyncExternalStore(
+    (alCambiar) => {
+      const lista = window.matchMedia(consulta);
+      lista.addEventListener("change", alCambiar);
+      return () => lista.removeEventListener("change", alCambiar);
+    },
+    () => window.matchMedia(consulta).matches,
+    // En el servidor no hay ventana: se asume la pantalla más estrecha.
+    () => false,
+  );
+}
+
 /**
  * Tres zonas en pantallas anchas: control · mapa · ejecución.
  *
@@ -42,25 +69,30 @@ const ALTURA: Record<AlturaPanel, string> = {
  */
 export function RoutePlanner() {
   const [altura, setAltura] = useState<AlturaPanel>("normal");
-  const SIGUIENTE: Record<AlturaPanel, AlturaPanel> = {
-    contraido: "normal",
-    normal: "expandido",
-    expandido: "contraido",
-  };
-  const ETIQUETA: Record<AlturaPanel, string> = {
-    contraido: "Mostrar el panel",
-    normal: "Agrandar el panel",
-    expandido: "Ocultar el panel y ver el mapa completo",
-  };
+  const [pestana, setPestana] = useState("pasos");
+  const esLg = usePuntoDeCorte("(min-width: 64rem)");
+  const esXl = usePuntoDeCorte("(min-width: 80rem)");
+  const contenidoId = useId();
+
+  // Ruta, Editar y Datos solo están en el panel inferior por debajo de lg
+  // (arriba pasan a la columna lateral), y Análisis solo existe desde xl. Si
+  // la pestaña abierta deja de existir al cambiar el ancho (girar una
+  // tableta), se muestra Paso a paso en vez de dejar el panel vacío.
+  const disponible =
+    (["ruta", "editar", "datos"].includes(pestana) && !esLg) ||
+    (pestana === "analisis" && esXl) ||
+    ["pasos", "tabla", "cola"].includes(pestana);
+  const pestanaVisible = disponible ? pestana : "pasos";
+  const contraido = altura === "contraido" && !esXl;
 
   return (
     <PlannerProvider>
-      <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+      <div className="flex h-dvh min-h-0 flex-col overflow-hidden print:block print:h-auto print:overflow-visible">
         <Toolbar />
 
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] xl:grid-rows-1 lg:grid-cols-[minmax(300px,340px)_1fr] xl:grid-cols-[minmax(300px,340px)_1fr_minmax(340px,400px)]">
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] xl:grid-rows-1 lg:grid-cols-[minmax(300px,340px)_1fr] xl:grid-cols-[minmax(300px,340px)_1fr_minmax(340px,400px)] print:block">
           {/* Control */}
-          <aside className="row-span-1 hidden min-h-0 flex-col overflow-y-auto border-r lg:flex">
+          <aside className="no-imprimir row-span-1 hidden min-h-0 flex-col overflow-y-auto border-r lg:flex">
             <Tabs defaultValue="ruta" className="min-h-0 min-w-0 gap-0">
               <TabsList className="m-3 mb-0 grid w-auto grid-cols-3">
                 <TabsTrigger value="ruta">Ruta</TabsTrigger>
@@ -99,7 +131,13 @@ export function RoutePlanner() {
             )}
           >
             <Tabs
-              defaultValue="pasos"
+              value={pestanaVisible}
+              onValueChange={(valor) => {
+                if (typeof valor !== "string") return;
+                setPestana(valor);
+                // Tocar una pestaña con el panel contraído es pedir verla.
+                if (altura === "contraido") setAltura("normal");
+              }}
               className={cn(
                 "grid min-h-0 min-w-0 gap-0 xl:grid-rows-[auto_auto_1fr]",
                 // Contraído, la fila del contenido mide cero y queda recortada:
@@ -109,14 +147,16 @@ export function RoutePlanner() {
                   : "grid-rows-[auto_auto_1fr]",
               )}
             >
-              {/* Asa de arrastre, como en cualquier hoja inferior de móvil.
-                  Va aparte de las pestañas para no robarles ancho: con los
-                  botones dentro de la tira, la última pestaña se salía de la
-                  pantalla sin ninguna señal de que hubiera que desplazarla. */}
+              {/* Asa, como en cualquier hoja inferior de móvil. Va aparte de
+                  las pestañas para no robarles ancho: con los botones dentro
+                  de la tira, la última pestaña se salía de la pantalla sin
+                  ninguna señal de que hubiera que desplazarla. */}
               <div className="xl:hidden">
                 <button
                   type="button"
                   aria-label={ETIQUETA[altura]}
+                  aria-expanded={altura !== "contraido"}
+                  aria-controls={contenidoId}
                   onClick={() => setAltura(SIGUIENTE[altura])}
                   className="focus-visible:ring-ring/50 flex w-full cursor-pointer items-center justify-center py-2 outline-none focus-visible:ring-3"
                 >
@@ -147,49 +187,59 @@ export function RoutePlanner() {
                 </TabsList>
               </div>
 
-              <TabsContent value="pasos" className="min-h-0 min-w-0 overflow-hidden">
-                <StepsPanel />
-              </TabsContent>
-              <TabsContent value="tabla" className="min-h-0 min-w-0 overflow-hidden">
-                <DistanceTable />
-              </TabsContent>
-              <TabsContent value="cola" className="min-h-0 min-w-0 overflow-hidden">
-                <QueueView />
-              </TabsContent>
-              <TabsContent
-                value="analisis"
-                className="min-h-0 min-w-0 overflow-y-auto divide-y"
+              {/* Contraído, el contenido no se ve: tampoco debe poder
+                  alcanzarse con Tab ni leerse con el lector de pantalla. */}
+              <div
+                id={contenidoId}
+                inert={contraido}
+                className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]"
               >
-                <ComplexityNote />
-                <Legend />
-              </TabsContent>
-              <TabsContent
-                value="ruta"
-                className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
-              >
-                <RoutePanel />
-              </TabsContent>
-              <TabsContent
-                value="editar"
-                className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
-              >
-                <EditorPanel />
-              </TabsContent>
-              <TabsContent
-                value="datos"
-                className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
-              >
-                <DataPanel />
-                <div className="mt-3 rounded-lg border">
+                <TabsContent value="pasos" className="min-h-0 min-w-0 overflow-hidden">
+                  <StepsPanel />
+                </TabsContent>
+                <TabsContent value="tabla" className="min-h-0 min-w-0 overflow-hidden">
+                  <DistanceTable />
+                </TabsContent>
+                <TabsContent value="cola" className="min-h-0 min-w-0 overflow-hidden">
+                  <QueueView />
+                </TabsContent>
+                <TabsContent
+                  value="analisis"
+                  className="min-h-0 min-w-0 overflow-y-auto divide-y"
+                >
                   <ComplexityNote />
-                </div>
-                <div className="mt-3 rounded-lg border">
                   <Legend />
-                </div>
-              </TabsContent>
+                </TabsContent>
+                <TabsContent
+                  value="ruta"
+                  className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
+                >
+                  <RoutePanel />
+                </TabsContent>
+                <TabsContent
+                  value="editar"
+                  className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
+                >
+                  <EditorPanel />
+                </TabsContent>
+                <TabsContent
+                  value="datos"
+                  className="min-h-0 min-w-0 overflow-y-auto p-3 lg:hidden"
+                >
+                  <DataPanel />
+                  <div className="mt-3 rounded-lg border">
+                    <ComplexityNote />
+                  </div>
+                  <div className="mt-3 rounded-lg border">
+                    <Legend />
+                  </div>
+                </TabsContent>
+              </div>
             </Tabs>
           </section>
         </div>
+
+        <PrintReport />
       </div>
     </PlannerProvider>
   );

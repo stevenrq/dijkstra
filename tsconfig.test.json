@@ -8,10 +8,15 @@
     "isolatedModules": false,
     "target": "ES2022",
     "lib": ["esnext", "dom"],
+    "rootDir": ".",
     "outDir": ".test-out",
     "types": ["node"],
     "plugins": []
   },
-  "include": ["lib/**/*.ts"],
-  "exclude": ["node_modules", ".next"]
+  "include": [
+    "lib/**/*.ts",
+    "components/planner/planner-reducer.ts",
+    "components/planner/__tests__/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".next", ".test-out"]
 }

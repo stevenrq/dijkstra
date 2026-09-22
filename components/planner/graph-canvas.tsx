@@ -24,7 +24,7 @@ import {
   nearestNodeInDirection,
   NODE_RADIUS,
 } from "@/lib/graph/geometry";
-import { formatMetricShort } from "@/lib/graph/format";
+import { formatCount, formatMetricShort } from "@/lib/graph/format";
 import { NODE_KIND_LABELS } from "@/lib/graph/types";
 
 import { CanvasDefs } from "./canvas-defs";
@@ -62,7 +62,8 @@ export function GraphCanvas() {
   const dispatch = usePlannerDispatch();
   const visuals = useGraphVisuals();
 
-  const { graph, metric, tool, selection, connectingFrom, result, runState } = state;
+  const { graph, metric, tool, selection, connectingFrom, result, runState, vista } =
+    state;
 
   const viewport = useSvgViewport({ x: 0, y: 0, width: 1060, height: 1460 });
   const {
@@ -88,6 +89,14 @@ export function GraphCanvas() {
     null,
   );
   const [aviso, setAviso] = useState("");
+
+  // Un frame de arrastre pendiente no debe ejecutarse sobre un lienzo desmontado.
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
 
   const nodeById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
@@ -135,26 +144,36 @@ export function GraphCanvas() {
    * efecto de montaje `clientWidth` todavía puede ser 0 y la proporción
    * saldría mal, dejando el grafo minúsculo.
    */
-  const fittedFor = useRef<string | null>(null);
+  const fittedFor = useRef<number | null>(null);
   useEffect(() => {
     const svg = svgRef.current;
-    if (!svg || graph.nodes.length === 0) return;
-    if (fittedFor.current === graph.id) return;
+    const contenedor = containerRef.current;
+    if (!svg || !contenedor) return;
+    if (fittedFor.current === vista) return;
+    // Un grafo vacío no se encuadra, pero la vista cuenta como atendida: si
+    // no, el primer punto que se agregara disparaba un encuadre sobre una caja
+    // mínima y el mapa pegaba un salto de zoom enorme.
+    if (graph.nodes.length === 0) {
+      fittedFor.current = vista;
+      return;
+    }
 
     const intentar = () => {
       if (svg.clientWidth === 0 || svg.clientHeight === 0) return false;
-      fittedFor.current = graph.id;
+      fittedFor.current = vista;
       fitTo(graphBounds(graph));
       return true;
     };
 
     if (intentar()) return;
+    // Se observa el contenedor HTML: ResizeObserver no avisa de los cambios
+    // de tamaño de un <svg>.
     const observer = new ResizeObserver(() => {
       if (intentar()) observer.disconnect();
     });
-    observer.observe(svg);
+    observer.observe(contenedor);
     return () => observer.disconnect();
-  }, [graph, fitTo, svgRef]);
+  }, [graph, vista, fitTo, svgRef, containerRef]);
 
   const ajustarVista = useCallback(() => {
     fitTo(graphBounds(graph));
@@ -165,6 +184,15 @@ export function GraphCanvas() {
   const commitDrag = useCallback(() => {
     const drag = dragRef.current;
     if (!drag) return;
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    // La última posición puede estar esperando al siguiente frame. Si se
+    // descartara, un arrastre rápido (todo dentro de un mismo frame) dejaría
+    // el nodo donde estaba, y uno normal, un poco antes de donde se soltó.
+    const pendiente = pendingRef.current;
+    if (pendiente) dispatch({ type: "MOVE_NODE", id: drag.id, ...pendiente });
     if (drag.moved) {
       dispatch({
         type: "COMMIT_MOVE",
@@ -174,10 +202,6 @@ export function GraphCanvas() {
       });
     }
     dragRef.current = null;
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
     pendingRef.current = null;
   }, [dispatch]);
 
@@ -306,6 +330,29 @@ export function GraphCanvas() {
 
   /* -------------------- Teclado -------------------- */
 
+  /**
+   * Mueve el foco al nodo indicado. Sin esto, las flechas cambiaban la
+   * selección pero el foco se quedaba en el nodo de partida: la siguiente
+   * flecha volvía a salir del mismo sitio, y Shift + flechas o Entrar
+   * actuaban sobre un nodo distinto del que se veía seleccionado.
+   */
+  const enfocarNodo = useCallback(
+    (id: string) => {
+      // El nodo recién seleccionado pasa a ser el tabulable en el siguiente
+      // render; se enfoca después de pintar.
+      requestAnimationFrame(() => {
+        svgRef.current
+          ?.querySelector<SVGGElement>(`[data-nodo="${CSS.escape(id)}"]`)
+          // El foco llega por una tecla, así que el anillo tiene que verse.
+          // Firefox no lo marca solo: si el foco anterior vino del ratón, el
+          // foco por código hereda "sin anillo". `focusVisible` lo fuerza; la
+          // versión de TypeScript del proyecto aún no lo tiene tipado.
+          ?.focus({ focusVisible: true } as FocusOptions);
+      });
+    },
+    [svgRef],
+  );
+
   const handleNodeKeyDown = useCallback(
     (event: React.KeyboardEvent<SVGGElement>, id: string) => {
       const node = nodeById.get(id);
@@ -337,6 +384,7 @@ export function GraphCanvas() {
           const siguiente = nearestNodeInDirection(graph.nodes, id, direccion);
           if (siguiente) {
             dispatch({ type: "SELECT", selection: { kind: "node", id: siguiente } });
+            enfocarNodo(siguiente);
             setAviso(`${nodeById.get(siguiente)?.label ?? siguiente} seleccionado.`);
           }
         }
@@ -356,19 +404,34 @@ export function GraphCanvas() {
 
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
+        // El atajo global también escucha Supr: sin detener la propagación,
+        // una sola pulsación borraba el nodo enfocado y además lo seleccionado.
+        event.stopPropagation();
+        const vecino = graph.nodes
+          .filter((otro) => otro.id !== id)
+          .sort(
+            (a, b) =>
+              Math.hypot(a.x - node.x, a.y - node.y) -
+              Math.hypot(b.x - node.x, b.y - node.y),
+          )[0];
         dispatch({ type: "DELETE_NODE", id });
         setAviso(`${node.label} eliminado.`);
+        // El foco no puede quedarse en un nodo que ya no existe.
+        if (vecino) {
+          dispatch({ type: "SELECT", selection: { kind: "node", id: vecino.id } });
+          enfocarNodo(vecino.id);
+        }
       }
     },
-    [connectingFrom, dispatch, graph.nodes, nodeById],
+    [connectingFrom, dispatch, enfocarNodo, graph.nodes, nodeById],
   );
 
   // Atajos globales del lienzo.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
+      const target = event.target as Element | null;
       if (
-        target &&
+        target instanceof HTMLElement &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable)
@@ -376,11 +439,23 @@ export function GraphCanvas() {
         return;
       }
 
+      // Los atajos solo valen con el foco en la página o en el lienzo. Con el
+      // foco en un botón, una pestaña o una lista desplegable, la tecla es de
+      // ese control: escribir «d» para buscar «Dígrafo» en el selector de
+      // escenario activaba la herramienta de eliminar, y Supr sobre un botón
+      // borraba lo seleccionado en el mapa.
+      const enElLienzo =
+        target === null ||
+        target === document.body ||
+        target === document.documentElement ||
+        target.closest('[data-slot="lienzo"]') !== null;
+
       if (event.key === "Escape" && connectingFrom) {
         dispatch({ type: "CANCEL_CONNECT" });
         setConnectPreview(null);
         return;
       }
+      if (!enElLienzo) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
 
       const atajos: Record<string, Tool> = {
@@ -435,6 +510,7 @@ export function GraphCanvas() {
   return (
     <div
       ref={containerRef}
+      data-slot="lienzo"
       className="relative flex h-full min-h-0 w-full flex-col bg-graph-surface"
     >
       <svg
@@ -442,7 +518,7 @@ export function GraphCanvas() {
         viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
         preserveAspectRatio="xMidYMid meet"
         role="application"
-        aria-label={`Lienzo del grafo de distribución. ${graph.nodes.length} puntos y ${graph.edges.length} corredores.`}
+        aria-label={`Lienzo del grafo de distribución. ${formatCount(graph.nodes.length, "punto", "puntos")} y ${formatCount(graph.edges.length, "corredor", "corredores")}.`}
         /* touch-none es obligatorio: sin él, el desplazamiento táctil se queda
            con el gesto y no se puede arrastrar un nodo en el móvil. */
         className={cn(

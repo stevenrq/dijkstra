@@ -35,13 +35,18 @@ export function DataPanel() {
     [graph, metric],
   );
 
+  // Dos conjuntos: la lista resalta el arco concreto (con aristas paralelas,
+  // solo la que usa la ruta), y la matriz, que tiene una celda por par, el par.
   const enRuta = useMemo(() => {
-    if (runState !== "ready" || !result) return new Set<string>();
+    const arcos = new Set<string>();
     const pares = new Set<string>();
-    for (let i = 1; i < result.path.length; i++) {
-      pares.add(`${result.path[i - 1]}->${result.path[i]}`);
-    }
-    return pares;
+    if (runState !== "ready" || !result) return { arcos, pares };
+    result.pathEdges.forEach((edgeId, i) => {
+      const par = `${result.path[i]}->${result.path[i + 1]}`;
+      arcos.add(`${edgeId}:${par}`);
+      pares.add(par);
+    });
+    return { arcos, pares };
   }, [result, runState]);
 
   if (graph.nodes.length === 0) {
@@ -63,7 +68,7 @@ export function DataPanel() {
             aria-pressed={vista === opcion}
             onClick={() => setVista(opcion)}
             className={cn(
-              "focus-visible:ring-ring/50 rounded-md px-2 py-1 text-sm font-medium capitalize transition-colors outline-none focus-visible:ring-3",
+              "focus-visible:ring-ring/50 rounded-md px-2 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-3",
               vista === opcion
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
@@ -95,7 +100,7 @@ export function DataPanel() {
                       key={`${arco.edgeId}-${arco.to}`}
                       className={cn(
                         "flex items-baseline justify-between gap-2 text-xs",
-                        enRuta.has(`${fila.id}->${arco.to}`) &&
+                        enRuta.arcos.has(`${arco.edgeId}:${fila.id}->${arco.to}`) &&
                           "text-graph-path font-medium",
                       )}
                     >
@@ -116,9 +121,9 @@ export function DataPanel() {
             <TableHeader>
               <TableRow>
                 <TableHead className="bg-card sticky left-0 z-10" />
-                {matriz.labels.map((label) => (
+                {matriz.labels.map((label, j) => (
                   <TableHead
-                    key={label}
+                    key={matriz.ids[j]}
                     className="text-right text-xs whitespace-nowrap"
                   >
                     {label}
@@ -140,7 +145,7 @@ export function DataPanel() {
                         className={cn(
                           "text-right text-xs tabular-nums",
                           valor === null && "text-muted-foreground/50",
-                          enRuta.has(`${rowId}->${colId}`) &&
+                          enRuta.pares.has(`${rowId}->${colId}`) &&
                             "bg-graph-path/15 text-graph-path font-semibold",
                         )}
                       >

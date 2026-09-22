@@ -59,10 +59,11 @@ export const metadata: Metadata = {
   },
 };
 
+// Los mismos fondos de `--background` en globals.css, pasados a hexadecimal.
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#f1f4f6" },
+    { media: "(prefers-color-scheme: dark)", color: "#0e131b" },
   ],
 };
 

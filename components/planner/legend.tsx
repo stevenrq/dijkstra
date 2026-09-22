@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 /**
  * Leyenda de estados.
  *
@@ -85,11 +87,12 @@ const ESTADOS = [
 ];
 
 export function Legend() {
+  const tituloId = useId();
   return (
-    <section className="grid gap-2 px-3 py-3" aria-labelledby="leyenda">
-      <h3 id="leyenda" className="text-sm font-medium">
+    <section className="grid gap-2 px-3 py-3" aria-labelledby={tituloId}>
+      <h2 id={tituloId} className="text-sm font-medium">
         Leyenda
-      </h3>
+      </h2>
       <ul className="grid gap-1.5">
         {ESTADOS.map((estado) => (
           <li key={estado.nombre} className="flex items-center gap-2.5">

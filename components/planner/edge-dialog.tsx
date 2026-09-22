@@ -14,6 +14,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { formatDecimal, parseColombianNumber } from "@/lib/graph/format";
 import type { GraphNode } from "@/lib/graph/types";
 import { usePlannerDispatch } from "./planner-context";
 
@@ -66,10 +67,11 @@ function valoresIniciales(from: GraphNode, to: GraphNode) {
     5,
     Math.round(Math.hypot(to.x - from.x, to.y - from.y) * KM_POR_UNIDAD),
   );
+  // Prellenados como se escriben en Colombia, igual que se leen al enviar.
   return {
-    distance: String(km),
-    time: String(Math.round((km / VELOCIDAD_MEDIA) * 10) / 10),
-    cost: String(km * COP_POR_KM),
+    distance: formatDecimal(km, 0),
+    time: formatDecimal(Math.round((km / VELOCIDAD_MEDIA) * 10) / 10, 1),
+    cost: formatDecimal(km * COP_POR_KM, 0),
   };
 }
 
@@ -92,23 +94,23 @@ function EdgeForm({
   const [label, setLabel] = useState("");
   const [directed, setDirected] = useState(false);
 
-  const parse = (value: string) => Number(value.replace(",", "."));
+  // Un campo vacío no es un peso de cero: `Number("")` daba 0 y se aceptaba.
   const values = {
-    cost: parse(cost),
-    distance: parse(distance),
-    time: parse(time),
+    cost: parseColombianNumber(cost),
+    distance: parseColombianNumber(distance),
+    time: parseColombianNumber(time),
   };
-  const invalid = Object.values(values).some(
-    (value) => !Number.isFinite(value) || value < 0,
-  );
+  const malo = (value: number | null) => value === null || value < 0;
+  const invalid = Object.values(values).some(malo);
 
   const submit = () => {
+    if (values.cost === null || values.distance === null || values.time === null) return;
     if (invalid) return;
     dispatch({
       type: "ADD_EDGE",
       from: from.id,
       to: to.id,
-      weights: values,
+      weights: { cost: values.cost, distance: values.distance, time: values.time },
       directed,
       label,
     });
@@ -150,7 +152,7 @@ function EdgeForm({
               inputMode="decimal"
               value={cost}
               onChange={(event) => setCost(event.target.value)}
-              aria-invalid={!Number.isFinite(values.cost) || values.cost < 0}
+              aria-invalid={malo(values.cost)}
             />
           </Field>
           <Field>
@@ -160,9 +162,7 @@ function EdgeForm({
               inputMode="decimal"
               value={distance}
               onChange={(event) => setDistance(event.target.value)}
-              aria-invalid={
-                !Number.isFinite(values.distance) || values.distance < 0
-              }
+              aria-invalid={malo(values.distance)}
             />
           </Field>
           <Field>
@@ -172,7 +172,7 @@ function EdgeForm({
               inputMode="decimal"
               value={time}
               onChange={(event) => setTime(event.target.value)}
-              aria-invalid={!Number.isFinite(values.time) || values.time < 0}
+              aria-invalid={malo(values.time)}
             />
           </Field>
         </div>
@@ -194,8 +194,8 @@ function EdgeForm({
 
         {invalid && (
           <p className="text-destructive text-sm">
-            Los tres pesos deben ser números mayores o iguales que cero.
-            Dijkstra no admite pesos negativos.
+            Los tres pesos deben ser números mayores o iguales que cero (por
+            ejemplo 1.500.000 o 12,5). Dijkstra no admite pesos negativos.
           </p>
         )}
 

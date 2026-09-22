@@ -53,7 +53,8 @@ export function validateGraph(graph: Graph, metric: Metric): ValidationIssue[] {
 
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   const labelOf = new Map(graph.nodes.map((node) => [node.id, node.label]));
-  const seenPairs = new Map<string, string>();
+  /** Arcos dirigidos ya vistos. Un corredor de doble sentido aporta los dos. */
+  const seenArcs = new Set<string>();
 
   for (const edge of graph.edges) {
     const weight = edge.weights[metric];
@@ -94,23 +95,52 @@ export function validateGraph(graph: Graph, metric: Metric): ValidationIssue[] {
         message: `${fromLabel} tiene un lazo. Los lazos no afectan a Dijkstra: con pesos no negativos nunca mejoran una distancia, así que se ignoran.`,
       });
     } else {
-      const key = edge.directed
-        ? `${edge.from}->${edge.to}`
-        : [edge.from, edge.to].sort().join("--");
-      const previous = seenPairs.get(key);
-      if (previous) {
+      // Se compara por arcos y no por pares de nodos: así un sentido único
+      // A→B junto a un doble sentido A–B también cuenta como paralelo (los dos
+      // ofrecen el arco A→B), y dos sentidos únicos opuestos no.
+      const arcs = edge.directed
+        ? [`${edge.from}->${edge.to}`]
+        : [`${edge.from}->${edge.to}`, `${edge.to}->${edge.from}`];
+      if (arcs.some((arc) => seenArcs.has(arc))) {
         issues.push({
           code: "PARALLEL_EDGE",
           severity: "warning",
           edgeId: edge.id,
           message: `Hay más de un corredor entre ${fromLabel} y ${toLabel}. Se conservan ambos: la relajación se queda automáticamente con el de menor ${metricName}.`,
         });
-      } else {
-        seenPairs.set(key, edge.id);
       }
+      for (const arc of arcs) seenArcs.add(arc);
     }
   }
 
+  return issues;
+}
+
+/**
+ * Origen y destino: los dos tienen que existir en el grafo. Sin destino no hay
+ * ruta que mostrar, y calcular «algo» daría una hoja de ruta vacía de $ 0.
+ */
+export function validateEndpoints(
+  graph: Graph,
+  source: NodeId | null,
+  target: NodeId | null,
+): ValidationIssue[] {
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const issues: ValidationIssue[] = [];
+  if (source === null || !ids.has(source)) {
+    issues.push({
+      code: "NO_SOURCE",
+      severity: "error",
+      message: "Escoge un punto de origen antes de calcular la ruta.",
+    });
+  }
+  if (target === null || !ids.has(target)) {
+    issues.push({
+      code: "NO_TARGET",
+      severity: "error",
+      message: "Escoge un punto de destino antes de calcular la ruta.",
+    });
+  }
   return issues;
 }
 

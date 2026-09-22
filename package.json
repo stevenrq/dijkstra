@@ -7,9 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsc -p tsconfig.test.json && node --test \".test-out/graph/__tests__/*.test.js\"",
-    "typecheck": "tsc --noEmit",
-    "test:movil": "node scripts/prueba-movil.mjs"
+    "pretest": "node -e \"require('node:fs').rmSync('.test-out',{recursive:true,force:true})\"",
+    "test": "tsc -p tsconfig.test.json && node --test \".test-out/**/__tests__/*.test.js\"",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test:movil": "node scripts/prueba-movil.mjs",
+    "test:escritorio": "node scripts/prueba-escritorio.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

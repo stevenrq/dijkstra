@@ -8,7 +8,12 @@ import type {
   Metric,
   NodeId,
 } from "@/lib/graph/types";
-import { cloneGraph, DEFAULT_SCENARIO_ID, getScenario } from "@/lib/scenarios";
+// Importaciones relativas a propósito: este módulo también se compila para
+// `node --test`, que no resuelve el alias `@/`.
+import { cloneGraph, DEFAULT_SCENARIO_ID, getScenario } from "../../lib/scenarios";
+import { freePosition } from "../../lib/graph/geometry";
+import { parseGraphObject } from "../../lib/graph/serialization";
+import { METRICS } from "../../lib/graph/types";
 
 export type Tool = "select" | "add-node" | "connect" | "delete";
 export type RunState = "idle" | "ready" | "error";
@@ -19,6 +24,18 @@ export type Selection =
   | { kind: "edge"; id: string }
   | null;
 
+/**
+ * Lo que guarda cada entrada del historial. No basta con el grafo: deshacer
+ * el borrado del origen tiene que devolver también el origen, y deshacer una
+ * importación, el escenario y los extremos que había.
+ */
+export interface HistorySnapshot {
+  graph: Graph;
+  source: NodeId | null;
+  target: NodeId | null;
+  scenarioId: string;
+}
+
 export interface PlannerState {
   graph: Graph;
   scenarioId: string;
@@ -26,7 +43,8 @@ export interface PlannerState {
   source: NodeId | null;
   target: NodeId | null;
   /** Contadores puros: generar ids con crypto.randomUUID() dentro del reductor
-   *  sería impuro y StrictMode lo ejecutaría dos veces en desarrollo. */
+   *  sería impuro y StrictMode lo ejecutaría dos veces en desarrollo. Son solo
+   *  una pista: el id que se asigna siempre salta los que ya existen. */
   nextNodeNumber: number;
   nextEdgeNumber: number;
 
@@ -44,13 +62,29 @@ export interface PlannerState {
   speed: Speed;
   showTree: boolean;
 
-  history: { past: Graph[]; future: Graph[] };
+  history: {
+    past: HistorySnapshot[];
+    future: HistorySnapshot[];
+    /**
+     * Grupo de edición abierto. Las pulsaciones seguidas sobre el mismo campo
+     * (renombrar un punto, escribir un peso) se funden en una sola entrada:
+     * sin esto, cada tecla era un paso de deshacer y un nombre largo llenaba
+     * el historial entero.
+     */
+    group: string | null;
+  };
+  /**
+   * Sube cada vez que el grafo se reemplaza entero (escenario, importación,
+   * vaciar, deshacer entre grafos distintos). El lienzo reencuadra cuando
+   * cambia, en vez de fiarse del id del grafo, que puede repetirse.
+   */
+  vista: number;
   hydrated: boolean;
 }
 
 export type PlannerAction =
   // Edición del grafo
-  | { type: "ADD_NODE"; x: number; y: number; label?: string; kind?: GraphNode["kind"] }
+  | { type: "ADD_NODE"; x?: number; y?: number; label?: string; kind?: GraphNode["kind"] }
   | { type: "UPDATE_NODE"; id: NodeId; changes: Partial<Omit<GraphNode, "id">> }
   | { type: "DELETE_NODE"; id: NodeId }
   | { type: "MOVE_NODE"; id: NodeId; x: number; y: number }
@@ -59,6 +93,7 @@ export type PlannerAction =
   | { type: "UPDATE_EDGE"; id: string; changes: Partial<Omit<GraphEdge, "id">> }
   | { type: "DELETE_EDGE"; id: string }
   | { type: "REVERSE_EDGE"; id: string }
+  | { type: "END_EDIT_GROUP" }
   // Selección y herramientas
   | { type: "SET_TOOL"; tool: Tool }
   | { type: "SELECT"; selection: Selection }
@@ -70,7 +105,7 @@ export type PlannerAction =
   | { type: "SET_METRIC"; metric: Metric }
   // Ejecución
   | { type: "RUN_OK"; result: DijkstraResult; comparison: Record<Metric, DijkstraResult> | null }
-  | { type: "RUN_FAILED"; issues: ValidationIssue[] }
+  | { type: "RUN_FAILED"; issues: ValidationIssue[]; metric?: Metric }
   | { type: "CLEAR_RESULT" }
   | { type: "STEP_NEXT" }
   | { type: "STEP_PREV" }
@@ -107,6 +142,17 @@ function nextCounters(graph: Graph): { node: number; edge: number } {
   return { node, edge };
 }
 
+/**
+ * Primer número libre a partir del contador. Después de vaciar y deshacer, o
+ * de importar y deshacer, el contador puede quedar por debajo de ids que ya
+ * existen; sin este salto se creaban dos "N1" y borrar uno borraba los dos.
+ */
+function freeNumber(prefix: string, desde: number, usados: Set<string>): number {
+  let n = Math.max(1, desde);
+  while (usados.has(`${prefix}${n}`)) n++;
+  return n;
+}
+
 export function initialState(scenarioId = DEFAULT_SCENARIO_ID): PlannerState {
   const scenario = getScenario(scenarioId);
   const graph = cloneGraph(scenario.graph);
@@ -130,36 +176,148 @@ export function initialState(scenarioId = DEFAULT_SCENARIO_ID): PlannerState {
     isPlaying: false,
     speed: 1,
     showTree: false,
-    history: { past: [], future: [] },
+    history: { past: [], future: [], group: null },
+    vista: 0,
     hydrated: false,
   };
 }
 
+function snapshot(state: PlannerState): HistorySnapshot {
+  return {
+    graph: state.graph,
+    source: state.source,
+    target: state.target,
+    scenarioId: state.scenarioId,
+  };
+}
+
+/** Todo lo que se descarta cuando el resultado deja de corresponder al grafo. */
+const RESULTADO_VACIO: Pick<
+  PlannerState,
+  "result" | "comparison" | "runState" | "issues" | "stepIndex" | "isPlaying"
+> = {
+  result: null,
+  comparison: null,
+  runState: "idle",
+  issues: [],
+  stepIndex: 0,
+  isPlaying: false,
+};
+
 /**
- * Toda edición del grafo pasa por aquí: empuja el grafo anterior al historial
+ * Toda edición del grafo pasa por aquí: empuja el estado anterior al historial
  * e invalida el resultado, porque un resultado calculado sobre otro grafo
  * mostraría una ruta que ya no existe.
+ *
+ * Con `group`, una edición que continúa el grupo abierto no crea entrada
+ * nueva: la que ya existe guarda el estado de antes de empezar a escribir.
  */
-function withGraphEdit(state: PlannerState, graph: Graph): PlannerState {
+function withGraphEdit(
+  state: PlannerState,
+  graph: Graph,
+  group: string | null = null,
+): PlannerState {
+  const continua = group !== null && state.history.group === group;
   return {
     ...state,
     graph,
     history: {
-      past: [...state.history.past, state.graph].slice(-HISTORY_LIMIT),
+      past: continua
+        ? state.history.past
+        : [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
       future: [],
+      group,
     },
-    result: null,
-    comparison: null,
-    runState: "idle",
-    issues: [],
-    stepIndex: 0,
-    isPlaying: false,
+    ...RESULTADO_VACIO,
   };
+}
+
+/** Quita las referencias a elementos que ya no existen en el grafo. */
+function sanitizeReferences(state: PlannerState): PlannerState {
+  const nodos = new Set(state.graph.nodes.map((node) => node.id));
+  const aristas = new Set(state.graph.edges.map((edge) => edge.id));
+  const selection =
+    state.selection === null
+      ? null
+      : state.selection.kind === "node"
+        ? nodos.has(state.selection.id)
+          ? state.selection
+          : null
+        : aristas.has(state.selection.id)
+          ? state.selection
+          : null;
+  return {
+    ...state,
+    selection,
+    connectingFrom:
+      state.connectingFrom && nodos.has(state.connectingFrom)
+        ? state.connectingFrom
+        : null,
+    source: state.source && nodos.has(state.source) ? state.source : null,
+    target: state.target && nodos.has(state.target) ? state.target : null,
+  };
+}
+
+function restore(
+  state: PlannerState,
+  entrada: HistorySnapshot,
+  history: PlannerState["history"],
+): PlannerState {
+  return sanitizeReferences({
+    ...state,
+    ...entrada,
+    history,
+    vista: entrada.graph.id !== state.graph.id ? state.vista + 1 : state.vista,
+    ...RESULTADO_VACIO,
+  });
 }
 
 function clampStep(state: PlannerState, index: number): number {
   const last = (state.result?.steps.length ?? 1) - 1;
-  return Math.max(0, Math.min(index, Math.max(0, last)));
+  const entero = Number.isFinite(index) ? Math.round(index) : 0;
+  return Math.max(0, Math.min(entero, Math.max(0, last)));
+}
+
+/** Clave del grupo de edición: mismo tipo, mismo elemento, mismos campos. */
+function grupo(tipo: string, id: string, changes: object): string {
+  return `${tipo}:${id}:${Object.keys(changes).sort().join(",")}`;
+}
+
+function sameWeights(a: EdgeWeights, b: EdgeWeights): boolean {
+  return METRICS.every((m) => Object.is(a[m], b[m]));
+}
+
+/**
+ * Valida lo que se leyó del almacenamiento local antes de meterlo al estado.
+ *
+ * Lo que hay en localStorage puede estar corrupto, a medias o venir de una
+ * versión anterior; antes se volcaba tal cual y un `{"version":1}` sin grafo
+ * dejaba la página rota en cada carga, sin forma de salir. Devuelve `null` si
+ * el grafo no es válido: entonces se usan los valores por defecto.
+ */
+export function sanitizeSavedState(saved: Partial<PlannerState>): Partial<PlannerState> | null {
+  let graph: Graph;
+  try {
+    graph = parseGraphObject(saved.graph);
+  } catch {
+    return null;
+  }
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const counters = nextCounters(graph);
+  const contador = (valor: unknown, minimo: number) =>
+    Number.isInteger(valor) && (valor as number) >= 1
+      ? Math.max(valor as number, minimo)
+      : minimo;
+
+  return {
+    graph,
+    scenarioId: typeof saved.scenarioId === "string" ? saved.scenarioId : "importado",
+    metric: METRICS.includes(saved.metric as Metric) ? (saved.metric as Metric) : "cost",
+    source: typeof saved.source === "string" && ids.has(saved.source) ? saved.source : null,
+    target: typeof saved.target === "string" && ids.has(saved.target) ? saved.target : null,
+    nextNodeNumber: contador(saved.nextNodeNumber, counters.node),
+    nextEdgeNumber: contador(saved.nextEdgeNumber, counters.edge),
+  };
 }
 
 export function plannerReducer(
@@ -170,13 +328,22 @@ export function plannerReducer(
     /* ---------------- Edición del grafo ---------------- */
 
     case "ADD_NODE": {
-      const id = `N${state.nextNodeNumber}`;
+      const numero = freeNumber(
+        "N",
+        state.nextNodeNumber,
+        new Set(state.graph.nodes.map((node) => node.id)),
+      );
+      const id = `N${numero}`;
+      const posicion =
+        action.x !== undefined && action.y !== undefined
+          ? { x: action.x, y: action.y }
+          : freePosition(state.graph);
       const node: GraphNode = {
         id,
-        label: action.label?.trim() || `Punto ${state.nextNodeNumber}`,
+        label: action.label?.trim() || `Punto ${numero}`,
         kind: action.kind ?? "delivery",
-        x: Math.round(action.x),
-        y: Math.round(action.y),
+        x: Math.round(posicion.x),
+        y: Math.round(posicion.y),
       };
       const next = withGraphEdit(state, {
         ...state.graph,
@@ -184,39 +351,53 @@ export function plannerReducer(
       });
       return {
         ...next,
-        nextNodeNumber: state.nextNodeNumber + 1,
+        nextNodeNumber: numero + 1,
         selection: { kind: "node", id },
         source: state.source ?? id,
       };
     }
 
     case "UPDATE_NODE": {
-      return withGraphEdit(state, {
-        ...state.graph,
-        nodes: state.graph.nodes.map((node) =>
-          node.id === action.id ? { ...node, ...action.changes } : node,
-        ),
-      });
+      const actual = state.graph.nodes.find((node) => node.id === action.id);
+      if (!actual) return state;
+      const cambia = (Object.keys(action.changes) as (keyof typeof action.changes)[]).some(
+        (clave) => !Object.is(actual[clave], action.changes[clave]),
+      );
+      if (!cambia) return state;
+      return withGraphEdit(
+        state,
+        {
+          ...state.graph,
+          nodes: state.graph.nodes.map((node) =>
+            node.id === action.id ? { ...node, ...action.changes } : node,
+          ),
+        },
+        grupo("UPDATE_NODE", action.id, action.changes),
+      );
     }
 
     case "DELETE_NODE": {
+      if (!state.graph.nodes.some((node) => node.id === action.id)) return state;
       // Borrar un nodo debe arrastrar sus aristas y limpiar todo lo que lo
       // referencie, en una sola transición.
+      const incidentes = new Set(
+        state.graph.edges
+          .filter((edge) => edge.from === action.id || edge.to === action.id)
+          .map((edge) => edge.id),
+      );
       const next = withGraphEdit(state, {
         ...state.graph,
         nodes: state.graph.nodes.filter((node) => node.id !== action.id),
-        edges: state.graph.edges.filter(
-          (edge) => edge.from !== action.id && edge.to !== action.id,
-        ),
+        edges: state.graph.edges.filter((edge) => !incidentes.has(edge.id)),
       });
+      const seleccionBorrada =
+        (state.selection?.kind === "node" && state.selection.id === action.id) ||
+        (state.selection?.kind === "edge" && incidentes.has(state.selection.id));
       return {
         ...next,
         source: state.source === action.id ? null : state.source,
         target: state.target === action.id ? null : state.target,
-        selection:
-          state.selection?.kind === "node" && state.selection.id === action.id
-            ? null
-            : state.selection,
+        selection: seleccionBorrada ? null : state.selection,
         connectingFrom:
           state.connectingFrom === action.id ? null : state.connectingFrom,
       };
@@ -253,21 +434,30 @@ export function plannerReducer(
       return {
         ...state,
         history: {
-          past: [...state.history.past, before].slice(-HISTORY_LIMIT),
+          past: [...state.history.past, { ...snapshot(state), graph: before }].slice(
+            -HISTORY_LIMIT,
+          ),
           future: [],
+          group: null,
         },
       };
     }
 
     case "ADD_EDGE": {
-      const id = `A${state.nextEdgeNumber}`;
+      const numero = freeNumber(
+        "A",
+        state.nextEdgeNumber,
+        new Set(state.graph.edges.map((edge) => edge.id)),
+      );
+      const id = `A${numero}`;
+      const label = action.label?.trim();
       const edge: GraphEdge = {
         id,
         from: action.from,
         to: action.to,
         directed: action.directed,
         weights: { ...action.weights },
-        label: action.label?.trim() || undefined,
+        ...(label ? { label } : {}),
       };
       const next = withGraphEdit(state, {
         ...state.graph,
@@ -275,30 +465,44 @@ export function plannerReducer(
       });
       return {
         ...next,
-        nextEdgeNumber: state.nextEdgeNumber + 1,
+        nextEdgeNumber: numero + 1,
         connectingFrom: null,
         selection: { kind: "edge", id },
       };
     }
 
     case "UPDATE_EDGE": {
-      return withGraphEdit(state, {
-        ...state.graph,
-        edges: state.graph.edges.map((edge) =>
-          edge.id === action.id
-            ? {
-                ...edge,
-                ...action.changes,
-                weights: action.changes.weights
-                  ? { ...action.changes.weights }
-                  : edge.weights,
-              }
-            : edge,
-        ),
-      });
+      const actual = state.graph.edges.find((edge) => edge.id === action.id);
+      if (!actual) return state;
+      const cambia = (Object.keys(action.changes) as (keyof typeof action.changes)[]).some(
+        (clave) =>
+          clave === "weights"
+            ? !sameWeights(actual.weights, action.changes.weights!)
+            : !Object.is(actual[clave], action.changes[clave]),
+      );
+      if (!cambia) return state;
+      return withGraphEdit(
+        state,
+        {
+          ...state.graph,
+          edges: state.graph.edges.map((edge) =>
+            edge.id === action.id
+              ? {
+                  ...edge,
+                  ...action.changes,
+                  weights: action.changes.weights
+                    ? { ...action.changes.weights }
+                    : edge.weights,
+                }
+              : edge,
+          ),
+        },
+        grupo("UPDATE_EDGE", action.id, action.changes),
+      );
     }
 
     case "DELETE_EDGE": {
+      if (!state.graph.edges.some((edge) => edge.id === action.id)) return state;
       const next = withGraphEdit(state, {
         ...state.graph,
         edges: state.graph.edges.filter((edge) => edge.id !== action.id),
@@ -313,6 +517,7 @@ export function plannerReducer(
     }
 
     case "REVERSE_EDGE": {
+      if (!state.graph.edges.some((edge) => edge.id === action.id)) return state;
       return withGraphEdit(state, {
         ...state.graph,
         edges: state.graph.edges.map((edge) =>
@@ -322,6 +527,10 @@ export function plannerReducer(
         ),
       });
     }
+
+    case "END_EDIT_GROUP":
+      if (state.history.group === null) return state;
+      return { ...state, history: { ...state.history, group: null } };
 
     /* ---------------- Selección y herramientas ---------------- */
 
@@ -342,56 +551,33 @@ export function plannerReducer(
       return { ...state, connectingFrom: null };
 
     case "SET_SOURCE":
-      return {
-        ...state,
-        source: action.id,
-        result: null,
-        comparison: null,
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      if (state.source === action.id) return state;
+      return { ...state, source: action.id, ...RESULTADO_VACIO };
 
     case "SET_TARGET":
-      return {
-        ...state,
-        target: action.id,
-        result: null,
-        comparison: null,
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      if (state.target === action.id) return state;
+      return { ...state, target: action.id, ...RESULTADO_VACIO };
 
     case "SWAP_ENDPOINTS":
       return {
         ...state,
         source: state.target,
         target: state.source,
-        result: null,
-        comparison: null,
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
+        ...RESULTADO_VACIO,
       };
 
     case "SET_METRIC":
-      return {
-        ...state,
-        metric: action.metric,
-        result: null,
-        comparison: null,
-        runState: "idle",
-        issues: [],
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      if (state.metric === action.metric) return state;
+      return { ...state, metric: action.metric, ...RESULTADO_VACIO };
 
     /* ---------------- Ejecución ---------------- */
 
     case "RUN_OK":
       return {
         ...state,
+        // La ejecución puede haberse pedido con otra métrica (una fila de la
+        // comparativa): el resultado manda.
+        metric: action.result.metric,
         result: action.result,
         comparison: action.comparison,
         issues: action.result.issues,
@@ -406,6 +592,7 @@ export function plannerReducer(
     case "RUN_FAILED":
       return {
         ...state,
+        metric: action.metric ?? state.metric,
         result: null,
         comparison: null,
         issues: action.issues,
@@ -415,15 +602,7 @@ export function plannerReducer(
       };
 
     case "CLEAR_RESULT":
-      return {
-        ...state,
-        result: null,
-        comparison: null,
-        issues: [],
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      return { ...state, ...RESULTADO_VACIO };
 
     case "STEP_NEXT": {
       const last = (state.result?.steps.length ?? 1) - 1;
@@ -476,8 +655,24 @@ export function plannerReducer(
     /* ---------------- Datos ---------------- */
 
     case "LOAD_SCENARIO": {
+      // Volver a escoger el escenario que ya está cargado no hace nada: antes
+      // lo recargaba y se perdían todos los cambios sin aviso.
+      if (action.scenarioId === state.scenarioId) return state;
       const fresh = initialState(action.scenarioId);
-      return { ...fresh, metric: state.metric, speed: state.speed, hydrated: true };
+      return {
+        ...fresh,
+        metric: state.metric,
+        speed: state.speed,
+        showTree: state.showTree,
+        // Cambiar de escenario se puede deshacer, como cualquier edición.
+        history: {
+          past: [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
+          future: [],
+          group: null,
+        },
+        vista: state.vista + 1,
+        hydrated: true,
+      };
     }
 
     case "IMPORT_GRAPH": {
@@ -492,13 +687,13 @@ export function plannerReducer(
         target: action.graph.nodes.at(-1)?.id ?? null,
         selection: null,
         connectingFrom: null,
-        result: null,
-        comparison: null,
-        issues: [],
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-        history: { past: [...state.history.past, state.graph].slice(-HISTORY_LIMIT), future: [] },
+        ...RESULTADO_VACIO,
+        history: {
+          past: [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
+          future: [],
+          group: null,
+        },
+        vista: state.vista + 1,
       };
     }
 
@@ -518,49 +713,35 @@ export function plannerReducer(
         connectingFrom: null,
         nextNodeNumber: 1,
         nextEdgeNumber: 1,
+        vista: state.vista + 1,
       };
     }
 
     case "UNDO": {
       const previous = state.history.past.at(-1);
       if (!previous) return state;
-      return {
-        ...state,
-        graph: previous,
-        history: {
-          past: state.history.past.slice(0, -1),
-          future: [state.graph, ...state.history.future].slice(0, HISTORY_LIMIT),
-        },
-        result: null,
-        comparison: null,
-        issues: [],
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      return restore(state, previous, {
+        past: state.history.past.slice(0, -1),
+        future: [snapshot(state), ...state.history.future].slice(0, HISTORY_LIMIT),
+        group: null,
+      });
     }
 
     case "REDO": {
       const next = state.history.future[0];
       if (!next) return state;
-      return {
-        ...state,
-        graph: next,
-        history: {
-          past: [...state.history.past, state.graph].slice(-HISTORY_LIMIT),
-          future: state.history.future.slice(1),
-        },
-        result: null,
-        comparison: null,
-        issues: [],
-        runState: "idle",
-        stepIndex: 0,
-        isPlaying: false,
-      };
+      return restore(state, next, {
+        past: [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: state.history.future.slice(1),
+        group: null,
+      });
     }
 
-    case "HYDRATE":
-      return { ...state, ...action.state, hydrated: true };
+    case "HYDRATE": {
+      const guardado = sanitizeSavedState(action.state);
+      if (!guardado) return { ...state, hydrated: true };
+      return { ...state, ...guardado, hydrated: true, vista: state.vista + 1 };
+    }
 
     default:
       return state;

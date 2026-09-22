@@ -172,6 +172,37 @@ export function graphBounds(graph: Graph, padding = 90): BoundingBox | null {
 }
 
 /**
+ * Lugar libre para un punto nuevo creado desde el formulario.
+ *
+ * Parte del centro del grafo y recorre una espiral (ángulo áureo) hasta dar
+ * con un sitio a distancia holgada de todos los nodos. Es determinista y cae
+ * dentro de la zona que ya se está viendo, a diferencia de una posición al
+ * azar, que en los grafos pequeños quedaba fuera de la pantalla.
+ */
+export function freePosition(graph: Graph): Point {
+  const bounds = graphBounds(graph, 0);
+  if (!bounds) return { x: 500, y: 700 };
+  const center = {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  };
+  const separacion = NODE_RADIUS * 3.5;
+  for (let k = 0; k < 400; k++) {
+    const radio = 24 * Math.sqrt(k);
+    const angulo = k * 2.399963;
+    const candidato = {
+      x: Math.round(center.x + radio * Math.cos(angulo)),
+      y: Math.round(center.y + radio * Math.sin(angulo)),
+    };
+    const libre = graph.nodes.every(
+      (node) => Math.hypot(node.x - candidato.x, node.y - candidato.y) >= separacion,
+    );
+    if (libre) return candidato;
+  }
+  return { x: Math.round(center.x), y: Math.round(center.y) };
+}
+
+/**
  * Nodo más cercano en una dirección cardinal, para navegar el grafo con las
  * flechas del teclado. Solo considera los nodos que caen dentro de un cono de
  * 90° en esa dirección, y entre ellos elige el más próximo.

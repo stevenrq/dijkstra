@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 import { formatNumber } from "@/lib/graph/format";
 import { usePlanner } from "./planner-context";
 
@@ -11,17 +13,18 @@ import { usePlanner } from "./planner-context";
  */
 export function ComplexityNote() {
   const { graph, result, runState } = usePlanner();
+  const tituloId = useId();
 
   const V = graph.nodes.length;
   const A = graph.edges.length;
   const cota = V > 0 ? (V + A) * Math.log2(Math.max(2, V)) : 0;
 
   return (
-    <section className="grid gap-3 px-3 py-3" aria-labelledby="complejidad">
+    <section className="grid gap-3 px-3 py-3" aria-labelledby={tituloId}>
       <div>
-        <h3 id="complejidad" className="text-sm font-medium">
+        <h2 id={tituloId} className="text-sm font-medium">
           Complejidad
-        </h3>
+        </h2>
         <p className="text-muted-foreground mt-1 text-sm text-pretty">
           Con un montículo binario como cola de prioridad, Dijkstra corre en{" "}
           <span className="font-mono text-xs">O((V + A) · log V)</span>. Buscar

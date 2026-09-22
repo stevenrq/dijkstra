@@ -5,6 +5,7 @@ import { dijkstra, compareMetrics } from "../dijkstra";
 import { MinHeap } from "../min-heap";
 import { buildAdjacency } from "../adjacency";
 import { validateGraph } from "../validation";
+import { freePosition } from "../geometry";
 import type { Graph, Metric } from "../types";
 import { getScenario, cloneGraph } from "../../scenarios/index";
 
@@ -337,5 +338,179 @@ describe("Condiciones de optimalidad sobre grafos aleatorios", () => {
         }
       }
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Modo «detenerse en el destino» contra fuerza bruta.
+ *
+ * Las condiciones de optimalidad de arriba se comprueban sin destino. Aquí se
+ * compara el modo que de verdad usa la aplicación (con destino, cortando al
+ * consolidarlo) contra Floyd–Warshall, en grafos con pesos cero, aristas
+ * paralelas, lazos y mezcla de dirigidas y no dirigidas.
+ * ------------------------------------------------------------------ */
+
+function floydWarshall(graph: Graph): Map<string, Map<string, number>> {
+  const ids = graph.nodes.map((n) => n.id);
+  const d = new Map(ids.map((u) => [u, new Map(ids.map((v) => [v, u === v ? 0 : Infinity]))]));
+  const adjacency = buildAdjacency(graph, "distance");
+  for (const [u, arcs] of adjacency) {
+    for (const arc of arcs) {
+      if (arc.weight < d.get(u)!.get(arc.to)!) d.get(u)!.set(arc.to, arc.weight);
+    }
+  }
+  for (const k of ids)
+    for (const i of ids)
+      for (const j of ids) {
+        const via = d.get(i)!.get(k)! + d.get(k)!.get(j)!;
+        if (via < d.get(i)!.get(j)!) d.get(i)!.set(j, via);
+      }
+  return d;
+}
+
+function grafoMixto(seed: number): Graph {
+  const graph = randomGraph(seed);
+  let state = seed * 7919;
+  const rand = () => {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    return state / 0x7fffffff;
+  };
+  const extras = [];
+  for (let k = 0; k < 4; k++) {
+    const a = graph.nodes[Math.floor(rand() * graph.nodes.length)].id;
+    const b = graph.nodes[Math.floor(rand() * graph.nodes.length)].id;
+    const w = rand() < 0.3 ? 0 : Math.round(rand() * 40);
+    extras.push({
+      id: `x${k}`,
+      from: a,
+      to: b,
+      directed: rand() > 0.5,
+      weights: { cost: w, distance: w, time: w },
+    });
+  }
+  return { ...graph, edges: [...graph.edges, ...extras] };
+}
+
+describe("Detenerse en el destino coincide con Floyd–Warshall", () => {
+  it("en 150 grafos aleatorios y varios pares por grafo", () => {
+    let pares = 0;
+    for (let seed = 1; seed <= 150; seed++) {
+      const graph = grafoMixto(seed);
+      const fw = floydWarshall(graph);
+      const byId = new Map(graph.edges.map((e) => [e.id, e]));
+      for (let k = 0; k < 4; k++) {
+        const s = graph.nodes[(seed + k) % graph.nodes.length].id;
+        const t = graph.nodes[(seed * 3 + k * 5) % graph.nodes.length].id;
+        const esperado = fw.get(s)!.get(t)!;
+        const r = dijkstra(graph, s, t, { metric: "distance" });
+        const sinTraza = dijkstra(graph, s, t, { metric: "distance", recordSteps: false });
+        pares++;
+
+        assert.equal(r.total, esperado, `semilla ${seed}: ${s}→${t}`);
+        assert.equal(r.reachable, Number.isFinite(esperado));
+        assert.equal(sinTraza.total, r.total);
+        assert.deepEqual(sinTraza.path, r.path);
+        if (!r.reachable) {
+          assert.deepEqual(r.path, []);
+          continue;
+        }
+        assert.equal(r.path[0], s);
+        assert.equal(r.path.at(-1), t);
+        // Cada tramo existe con esa arista y en ese sentido.
+        r.pathEdges.forEach((edgeId, i) => {
+          const e = byId.get(edgeId)!;
+          const u = r.path[i];
+          const v = r.path[i + 1];
+          assert.ok(
+            (e.from === u && e.to === v) || (!e.directed && e.from === v && e.to === u),
+            `semilla ${seed}: la arista ${edgeId} no une ${u} con ${v}`,
+          );
+        });
+        const suma = r.pathEdges.reduce((acc, id) => acc + byId.get(id)!.weights.distance, 0);
+        assert.equal(suma, r.total);
+        assert.equal(r.totalsByMetric.distance, r.total);
+        assert.equal(r.steps.at(-1)!.distances[t], r.total);
+      }
+    }
+    assert.ok(pares >= 600);
+  });
+
+  it("en la red de Colombia, para todos los pares y las tres métricas", () => {
+    for (const metric of ["cost", "distance", "time"] as Metric[]) {
+      const g = {
+        ...colombia,
+        edges: colombia.edges.map((e) => ({
+          ...e,
+          weights: { cost: e.weights[metric], distance: e.weights[metric], time: e.weights[metric] },
+        })),
+      };
+      const fw = floydWarshall(g);
+      for (const s of colombia.nodes) {
+        for (const t of colombia.nodes) {
+          const r = dijkstra(colombia, s.id, t.id, { metric, recordSteps: false });
+          // Hay pares con dos rutas igual de rápidas: se comparan totales, no rutas.
+          assert.ok(Math.abs(r.total - fw.get(s.id)!.get(t.id)!) < 1e-9, `${metric} ${s.id}→${t.id}`);
+        }
+      }
+    }
+  });
+});
+
+describe("Dijkstra — identificadores delicados", () => {
+  for (const id of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    it(`un nodo llamado «${id}» funciona como origen y como destino`, () => {
+      const g: Graph = {
+        id: "g",
+        name: "g",
+        description: "",
+        nodes: [
+          { id, label: "X", kind: "hub", x: 0, y: 0 },
+          { id: "B", label: "B", kind: "hub", x: 1, y: 0 },
+        ],
+        edges: [{ id: "e", from: id, to: "B", directed: false, weights: { cost: 3, distance: 3, time: 3 } }],
+      };
+      const ida = dijkstra(g, id, "B", opts);
+      assert.equal(ida.total, 3);
+      assert.deepEqual(ida.path, [id, "B"]);
+      const vuelta = dijkstra(g, "B", id, opts);
+      assert.equal(vuelta.total, 3);
+      assert.equal(vuelta.reachable, true);
+    });
+  }
+
+  it("un origen que no existe no revienta ni inventa una ruta", () => {
+    const r = dijkstra(clrs, "toString", "C", opts);
+    assert.equal(r.reachable, false);
+    assert.deepEqual(r.steps, []);
+  });
+
+  it("grafo vacío: EMPTY_GRAPH y ninguna traza", () => {
+    const r = dijkstra(getScenario("vacio").graph, "A", null, opts);
+    assert.equal(r.issues[0].code, "EMPTY_GRAPH");
+    assert.deepEqual(r.steps, []);
+  });
+});
+
+describe("Posición libre para un punto nuevo", () => {
+  it("cae cerca del centro del grafo y lejos de los nodos", () => {
+    for (const escenario of ["colombia", "academico-clrs", "academico-paralelas"]) {
+      const g = getScenario(escenario).graph;
+      const p = freePosition(g);
+      const cx = g.nodes.reduce((a, n) => a + n.x, 0) / g.nodes.length;
+      const minX = Math.min(...g.nodes.map((n) => n.x));
+      const maxX = Math.max(...g.nodes.map((n) => n.x));
+      const minY = Math.min(...g.nodes.map((n) => n.y));
+      const maxY = Math.max(...g.nodes.map((n) => n.y));
+      assert.ok(p.x >= minX - 60 && p.x <= maxX + 60 && p.y >= minY - 60 && p.y <= maxY + 60, `${escenario}: fuera de la vista`);
+      assert.ok(g.nodes.every((n) => Math.hypot(n.x - p.x, n.y - p.y) >= 26 * 3.5 - 1), `${escenario}: encima de un nodo`);
+      assert.ok(Number.isFinite(cx));
+    }
+  });
+  it("sin nodos da una posición fija", () => {
+    assert.deepEqual(freePosition(getScenario("vacio").graph), { x: 500, y: 700 });
+  });
+  it("es determinista", () => {
+    const g = getScenario("colombia").graph;
+    assert.deepEqual(freePosition(g), freePosition(g));
   });
 });

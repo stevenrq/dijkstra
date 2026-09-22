@@ -11,13 +11,14 @@ import {
   type ReactNode,
 } from "react";
 
-import { compareMetrics, dijkstra, type DijkstraStep } from "@/lib/graph/dijkstra";
-import { hasBlockingErrors, validateGraph } from "@/lib/graph/validation";
+import type { DijkstraStep } from "@/lib/graph/dijkstra";
+import { solveRoute } from "@/lib/graph/route-sheet";
 import type { Metric, NodeId } from "@/lib/graph/types";
 import { usePlayback } from "@/hooks/use-playback";
 import {
   initialState,
   plannerReducer,
+  sanitizeSavedState,
   type PlannerAction,
   type PlannerState,
 } from "./planner-reducer";
@@ -32,7 +33,12 @@ import {
 
 const PlannerStateContext = createContext<PlannerState | null>(null);
 const PlannerDispatchContext = createContext<Dispatch<PlannerAction> | null>(null);
-const PlannerRunContext = createContext<(() => void) | null>(null);
+export interface RunOptions {
+  /** Calcular con otra métrica; si se omite, la que está escogida. */
+  metric?: Metric;
+}
+
+const PlannerRunContext = createContext<((options?: RunOptions) => void) | null>(null);
 
 const STORAGE_KEY = "rutaoptima-estado";
 /** Subir esta versión invalida los estados guardados con datos antiguos. */
@@ -48,33 +54,23 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
    * pero StrictMode lo invoca dos veces en desarrollo y calcularía todo por
    * duplicado. El resultado entra al estado como un dato ya calculado.
    */
-  const run = useCallback(() => {
-    const { graph, source, target, metric } = state;
-    if (!source) {
+  const { graph, source, target, metric } = state;
+  const run = useCallback(
+    (options?: RunOptions) => {
+      const metrica = options?.metric ?? metric;
+      const solucion = solveRoute(graph, source, target, metrica);
+      if (!solucion.ok) {
+        dispatch({ type: "RUN_FAILED", issues: solucion.issues, metric: metrica });
+        return;
+      }
       dispatch({
-        type: "RUN_FAILED",
-        issues: [
-          {
-            code: "NO_SOURCE",
-            severity: "error",
-            message: "Escoge un punto de origen antes de calcular la ruta.",
-          },
-        ],
+        type: "RUN_OK",
+        result: solucion.result,
+        comparison: solucion.comparison,
       });
-      return;
-    }
-
-    const issues = validateGraph(graph, metric);
-    if (hasBlockingErrors(issues)) {
-      dispatch({ type: "RUN_FAILED", issues });
-      return;
-    }
-
-    const result = dijkstra(graph, source, target, { metric });
-    const comparison =
-      target && result.reachable ? compareMetrics(graph, source, target) : null;
-    dispatch({ type: "RUN_OK", result, comparison });
-  }, [state]);
+    },
+    [graph, source, target, metric],
+  );
 
   const advance = useCallback(() => dispatch({ type: "STEP_NEXT" }), []);
 
@@ -100,25 +96,30 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       const parsed = JSON.parse(raw) as {
         version?: number;
       } & Partial<PlannerState>;
-      if (parsed.version !== STORAGE_VERSION) {
+      if (typeof parsed !== "object" || parsed === null || parsed.version !== STORAGE_VERSION) {
         window.localStorage.removeItem(STORAGE_KEY);
         dispatch({ type: "HYDRATE", state: {} });
         return;
       }
-      const saved = parsed;
-      dispatch({
-        type: "HYDRATE",
-        state: {
-          graph: saved.graph,
-          scenarioId: saved.scenarioId,
-          metric: saved.metric,
-          source: saved.source,
-          target: saved.target,
-          nextNodeNumber: saved.nextNodeNumber,
-          nextEdgeNumber: saved.nextEdgeNumber,
-        },
-      });
+      const saved = {
+        graph: parsed.graph,
+        scenarioId: parsed.scenarioId,
+        metric: parsed.metric,
+        source: parsed.source,
+        target: parsed.target,
+        nextNodeNumber: parsed.nextNodeNumber,
+        nextEdgeNumber: parsed.nextEdgeNumber,
+      };
+      // Un estado guardado que no pasa la validación se descarta del todo: si
+      // se quedara, la próxima carga volvería a tropezar con él.
+      if (!sanitizeSavedState(saved)) window.localStorage.removeItem(STORAGE_KEY);
+      dispatch({ type: "HYDRATE", state: saved });
     } catch {
+      try {
+        window.localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Almacenamiento bloqueado.
+      }
       dispatch({ type: "HYDRATE", state: {} });
     }
   }, []);
@@ -180,7 +181,7 @@ export function usePlannerDispatch(): Dispatch<PlannerAction> {
   return dispatch;
 }
 
-export function useRunAlgorithm(): () => void {
+export function useRunAlgorithm(): (options?: RunOptions) => void {
   const run = useContext(PlannerRunContext);
   if (!run) throw new Error("useRunAlgorithm debe usarse dentro de PlannerProvider");
   return run;

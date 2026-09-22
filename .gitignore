@@ -42,3 +42,8 @@ next-env.d.ts
 
 # test output
 /.test-out/
+
+# capturas y reportes de las pruebas de interfaz
+/capturas/
+/test-results/
+/playwright-report/

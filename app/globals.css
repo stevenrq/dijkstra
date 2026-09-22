@@ -66,6 +66,8 @@
 }
 
 :root {
+  /* Los controles nativos (barras de desplazamiento, campos) siguen al tema. */
+  color-scheme: light;
   --background: oklch(0.965 0.004 250);
   --foreground: oklch(0.255 0.045 262);
   --card: oklch(1 0 0);
@@ -121,53 +123,60 @@
   --graph-on-accent: oklch(0.99 0 0);
 }
 
-.dark {
-  --background: oklch(0.185 0.018 258);
-  --foreground: oklch(0.955 0.006 250);
-  --card: oklch(0.225 0.02 258);
-  --card-foreground: oklch(0.955 0.006 250);
-  --popover: oklch(0.225 0.02 258);
-  --popover-foreground: oklch(0.955 0.006 250);
-  --primary: oklch(0.9 0.015 250);
-  --primary-foreground: oklch(0.22 0.03 260);
-  --secondary: oklch(0.285 0.022 258);
-  --secondary-foreground: oklch(0.955 0.006 250);
-  --muted: oklch(0.265 0.02 258);
-  --muted-foreground: oklch(0.7 0.018 252);
-  --accent: oklch(0.3 0.024 256);
-  --accent-foreground: oklch(0.955 0.006 250);
-  --destructive: oklch(0.68 0.18 25);
-  --border: oklch(1 0 0 / 11%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.6 0.08 250);
-  --chart-1: oklch(0.7 0.13 155);
-  --chart-2: oklch(0.72 0.11 218);
-  --chart-3: oklch(0.8 0.14 78);
-  --chart-4: oklch(0.7 0.16 296);
-  --chart-5: oklch(0.7 0.17 30);
-  --sidebar: oklch(0.205 0.019 258);
-  --sidebar-foreground: oklch(0.955 0.006 250);
-  --sidebar-primary: oklch(0.9 0.015 250);
-  --sidebar-primary-foreground: oklch(0.22 0.03 260);
-  --sidebar-accent: oklch(0.3 0.024 256);
-  --sidebar-accent-foreground: oklch(0.955 0.006 250);
-  --sidebar-border: oklch(1 0 0 / 11%);
-  --sidebar-ring: oklch(0.6 0.08 250);
+/*
+ * El tema oscuro es solo para la pantalla. Al imprimir no se aplica y quedan
+ * los colores claros de :root: texto claro sobre papel blanco no se lee.
+ */
+@media not print {
+  .dark {
+    color-scheme: dark;
+    --background: oklch(0.185 0.018 258);
+    --foreground: oklch(0.955 0.006 250);
+    --card: oklch(0.225 0.02 258);
+    --card-foreground: oklch(0.955 0.006 250);
+    --popover: oklch(0.225 0.02 258);
+    --popover-foreground: oklch(0.955 0.006 250);
+    --primary: oklch(0.9 0.015 250);
+    --primary-foreground: oklch(0.22 0.03 260);
+    --secondary: oklch(0.285 0.022 258);
+    --secondary-foreground: oklch(0.955 0.006 250);
+    --muted: oklch(0.265 0.02 258);
+    --muted-foreground: oklch(0.7 0.018 252);
+    --accent: oklch(0.3 0.024 256);
+    --accent-foreground: oklch(0.955 0.006 250);
+    --destructive: oklch(0.68 0.18 25);
+    --border: oklch(1 0 0 / 11%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.6 0.08 250);
+    --chart-1: oklch(0.7 0.13 155);
+    --chart-2: oklch(0.72 0.11 218);
+    --chart-3: oklch(0.8 0.14 78);
+    --chart-4: oklch(0.7 0.16 296);
+    --chart-5: oklch(0.7 0.17 30);
+    --sidebar: oklch(0.205 0.019 258);
+    --sidebar-foreground: oklch(0.955 0.006 250);
+    --sidebar-primary: oklch(0.9 0.015 250);
+    --sidebar-primary-foreground: oklch(0.22 0.03 260);
+    --sidebar-accent: oklch(0.3 0.024 256);
+    --sidebar-accent-foreground: oklch(0.955 0.006 250);
+    --sidebar-border: oklch(1 0 0 / 11%);
+    --sidebar-ring: oklch(0.6 0.08 250);
 
-  --graph-surface: oklch(0.21 0.018 258);
-  --graph-grid: oklch(0.265 0.02 258);
-  --graph-edge: oklch(0.45 0.022 252);
-  --graph-pending: oklch(0.42 0.02 254);
-  --graph-frontier: oklch(0.72 0.11 218);
-  --graph-current: oklch(0.7 0.16 296);
-  --graph-settled: oklch(0.62 0.045 256);
-  --graph-path: oklch(0.8 0.14 78);
-  --graph-source: oklch(0.7 0.13 155);
-  --graph-target: oklch(0.7 0.17 30);
-  --graph-improved: oklch(0.72 0.13 155);
-  --graph-rejected: oklch(0.48 0.02 254);
-  --graph-tree: oklch(0.5 0.06 250);
-  --graph-on-accent: oklch(0.17 0.02 258);
+    --graph-surface: oklch(0.21 0.018 258);
+    --graph-grid: oklch(0.265 0.02 258);
+    --graph-edge: oklch(0.45 0.022 252);
+    --graph-pending: oklch(0.42 0.02 254);
+    --graph-frontier: oklch(0.72 0.11 218);
+    --graph-current: oklch(0.7 0.16 296);
+    --graph-settled: oklch(0.62 0.045 256);
+    --graph-path: oklch(0.8 0.14 78);
+    --graph-source: oklch(0.7 0.13 155);
+    --graph-target: oklch(0.7 0.17 30);
+    --graph-improved: oklch(0.72 0.13 155);
+    --graph-rejected: oklch(0.48 0.02 254);
+    --graph-tree: oklch(0.5 0.06 250);
+    --graph-on-accent: oklch(0.17 0.02 258);
+  }
 }
 
 @layer base {
@@ -222,7 +231,14 @@
   }
 }
 
-/* Informe imprimible: solo el lienzo y los resultados. */
+/*
+ * Informe imprimible: el mapa y la hoja de ruta, nada de controles.
+ *
+ * La hoja de ruta de la pantalla vive en la columna lateral (oculta por debajo
+ * de 1024 px, y una hoja A4 mide unos 700 px de ancho) o en el panel inferior,
+ * y además solo existe si su pestaña está abierta. Por eso el informe es un
+ * componente propio (`PrintReport`), que solo se muestra al imprimir.
+ */
 @media print {
   .no-imprimir {
     display: none !important;
@@ -239,6 +255,10 @@
     max-height: none !important;
     overflow: visible !important;
     break-inside: avoid;
+  }
+  /* En papel el lienzo no tiene una ventana que llenar: se le da un alto fijo. */
+  .area-impresion [data-slot="lienzo"] {
+    height: 150mm;
   }
   @page {
     margin: 1.5cm;
