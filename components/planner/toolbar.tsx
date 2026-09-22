@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import {
   Download,
   Eraser,
   GitBranch,
   Printer,
   Redo2,
+  RotateCcw,
   Undo2,
   Upload,
 } from "lucide-react";
@@ -30,10 +31,11 @@ import {
 } from "@/lib/graph/serialization";
 import { SCENARIOS } from "@/lib/scenarios";
 import { usePlanner, usePlannerDispatch } from "./planner-context";
+import { isScenarioPristine } from "./planner-reducer";
 import { ThemeToggle } from "./theme-toggle";
 
 export function Toolbar() {
-  const { graph, scenarioId, history, showTree } = usePlanner();
+  const { graph, scenarioId, source, target, history, showTree } = usePlanner();
   const dispatch = usePlannerDispatch();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -46,6 +48,12 @@ export function Toolbar() {
       ? [{ value: "importado", label: "Grafo importado" }]
       : []),
   ];
+
+  const nombreEscenario = SCENARIOS.find((s) => s.id === scenarioId)?.name;
+  const intacto = useMemo(
+    () => isScenarioPristine({ graph, source, target, scenarioId }),
+    [graph, source, target, scenarioId],
+  );
 
   const importar = async (file: File) => {
     try {
@@ -101,6 +109,29 @@ export function Toolbar() {
             ))}
           </SelectContent>
         </Select>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Restablecer el escenario a su estado inicial"
+                disabled={scenarioId === "importado" || intacto}
+                onClick={() => {
+                  dispatch({ type: "RESET_SCENARIO" });
+                  toast.add({
+                    title: "Escenario restablecido",
+                    description: `${nombreEscenario ?? "El escenario"} volvió a su estado inicial. Puedes deshacerlo con el botón de deshacer.`,
+                  });
+                }}
+              >
+                <RotateCcw />
+              </Button>
+            }
+          />
+          <TooltipContent>Restablecer escenario</TooltipContent>
+        </Tooltip>
 
         <ButtonGroup className="hidden sm:flex">
           <Tooltip>

@@ -119,6 +119,7 @@ export type PlannerAction =
   | { type: "TOGGLE_TREE" }
   // Datos
   | { type: "LOAD_SCENARIO"; scenarioId: string }
+  | { type: "RESET_SCENARIO" }
   | { type: "IMPORT_GRAPH"; graph: Graph }
   | { type: "CLEAR_GRAPH" }
   | { type: "UNDO" }
@@ -180,6 +181,38 @@ export function initialState(scenarioId = DEFAULT_SCENARIO_ID): PlannerState {
     vista: 0,
     hydrated: false,
   };
+}
+
+/** Sustituye el grafo por una copia limpia del escenario, conservando las preferencias. */
+function cargarEscenario(state: PlannerState, scenarioId: string): PlannerState {
+  const fresh = initialState(scenarioId);
+  return {
+    ...fresh,
+    metric: state.metric,
+    speed: state.speed,
+    showTree: state.showTree,
+    // Cambiar o restablecer el escenario se puede deshacer, como cualquier edición.
+    history: {
+      past: [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
+      group: null,
+    },
+    vista: state.vista + 1,
+    hydrated: true,
+  };
+}
+
+/** Indica si el grafo y los extremos siguen tal como los define el escenario. */
+export function isScenarioPristine(
+  state: Pick<PlannerState, "graph" | "source" | "target" | "scenarioId">,
+): boolean {
+  if (state.scenarioId === "importado") return false;
+  const fresh = initialState(state.scenarioId);
+  return (
+    fresh.source === state.source &&
+    fresh.target === state.target &&
+    JSON.stringify(fresh.graph) === JSON.stringify(state.graph)
+  );
 }
 
 function snapshot(state: PlannerState): HistorySnapshot {
@@ -658,21 +691,16 @@ export function plannerReducer(
       // Volver a escoger el escenario que ya está cargado no hace nada: antes
       // lo recargaba y se perdían todos los cambios sin aviso.
       if (action.scenarioId === state.scenarioId) return state;
-      const fresh = initialState(action.scenarioId);
-      return {
-        ...fresh,
-        metric: state.metric,
-        speed: state.speed,
-        showTree: state.showTree,
-        // Cambiar de escenario se puede deshacer, como cualquier edición.
-        history: {
-          past: [...state.history.past, snapshot(state)].slice(-HISTORY_LIMIT),
-          future: [],
-          group: null,
-        },
-        vista: state.vista + 1,
-        hydrated: true,
-      };
+      return cargarEscenario(state, action.scenarioId);
+    }
+
+    case "RESET_SCENARIO": {
+      // Recarga explícita del escenario activo; un grafo importado no tiene
+      // estado inicial al que volver, y uno intacto no necesita historial.
+      if (state.scenarioId === "importado" || isScenarioPristine(state)) {
+        return state;
+      }
+      return cargarEscenario(state, state.scenarioId);
     }
 
     case "IMPORT_GRAPH": {

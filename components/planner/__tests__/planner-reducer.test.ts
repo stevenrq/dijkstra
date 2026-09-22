@@ -3,12 +3,13 @@ import { describe, it } from "node:test";
 
 import {
   initialState,
+  isScenarioPristine,
   plannerReducer,
   type PlannerAction,
   type PlannerState,
 } from "../planner-reducer";
 import { solveRoute } from "../../../lib/graph/route-sheet";
-import { getScenario } from "../../../lib/scenarios/index";
+import { getScenario, SCENARIOS } from "../../../lib/scenarios/index";
 
 const aplicar = (state: PlannerState, ...acciones: PlannerAction[]) =>
   acciones.reduce(plannerReducer, state);
@@ -156,6 +157,11 @@ describe("Reductor — acciones sin efecto", () => {
     const s = aplicar(colombia(), { type: "UPDATE_NODE", id: "bog", changes: { label: "Bogotá Centro" } });
     assert.equal(plannerReducer(s, { type: "LOAD_SCENARIO", scenarioId: "colombia" }), s);
   });
+
+  it("restablecer un escenario intacto no crea historial", () => {
+    const s = colombia();
+    assert.equal(plannerReducer(s, { type: "RESET_SCENARIO" }), s);
+  });
 });
 
 describe("Reductor — agrupación de ediciones", () => {
@@ -201,6 +207,26 @@ describe("Reductor — escenarios", () => {
     assert.equal(s.scenarioId, "colombia");
     assert.equal(s.graph.nodes.length, 20);
     assert.equal(s.source, "bog");
+  });
+});
+
+describe("Reductor — restablecer escenario", () => {
+  it("devuelve cada escenario a su estado inicial y se puede deshacer", () => {
+    for (const { id } of SCENARIOS) {
+      const base = aplicar(colombia(), { type: "LOAD_SCENARIO", scenarioId: id });
+      const editado = aplicar(base, { type: "ADD_NODE", x: 10, y: 10 }, { type: "SET_SOURCE", id: null });
+      assert.equal(isScenarioPristine(editado), false);
+      const restablecido = plannerReducer(editado, { type: "RESET_SCENARIO" });
+      assert.equal(isScenarioPristine(restablecido), true);
+      assert.deepEqual(restablecido.graph, getScenario(id).graph);
+      assert.equal(restablecido.scenarioId, id);
+      assert.deepEqual(plannerReducer(restablecido, { type: "UNDO" }).graph, editado.graph);
+    }
+  });
+
+  it("no hace nada con un grafo importado", () => {
+    const s = aplicar(colombia(), { type: "IMPORT_GRAPH", graph: getScenario("academico-clrs").graph });
+    assert.equal(plannerReducer(s, { type: "RESET_SCENARIO" }), s);
   });
 });
 
