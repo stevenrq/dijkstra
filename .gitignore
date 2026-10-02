@@ -47,3 +47,7 @@ next-env.d.ts
 /capturas/
 /test-results/
 /playwright-report/
+
+# configuración local de Claude Code y salida de Playwright MCP
+.claude/settings.local.json
+/.playwright-mcp/
